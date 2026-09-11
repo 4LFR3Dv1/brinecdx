@@ -8,6 +8,8 @@ use crate::environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
 use crate::environment::REMOTE_ENVIRONMENT_ID;
 
+const BRINE_EXEC_SERVER_URL_ENV_VAR: &str = "BRINE_EXEC_SERVER_URL";
+
 /// Lists the remote environment transports available to Codex.
 ///
 /// Implementations own a startup snapshot containing both the available
@@ -47,21 +49,31 @@ pub enum EnvironmentDefault {
     EnvironmentId(String),
 }
 
-/// Default provider backed by `CODEX_EXEC_SERVER_URL`.
+/// Default provider backed by a Brine exec-server when configured, otherwise
+/// by Codex's standard `CODEX_EXEC_SERVER_URL` setting.
 #[derive(Clone, Debug)]
 pub struct DefaultEnvironmentProvider {
     exec_server_url: Option<String>,
 }
 
 impl DefaultEnvironmentProvider {
-    /// Builds a provider from an already-read raw `CODEX_EXEC_SERVER_URL` value.
+    /// Builds a provider from an already-read raw exec-server URL value.
     pub fn new(exec_server_url: Option<String>) -> Self {
         Self { exec_server_url }
     }
 
-    /// Builds a provider by reading `CODEX_EXEC_SERVER_URL`.
+    /// Builds a provider by reading the BrineCDX override first and then the
+    /// upstream Codex setting. This keeps upstream behavior unchanged unless
+    /// `BRINE_EXEC_SERVER_URL` is explicitly present.
     pub fn from_env() -> Self {
-        Self::new(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
+        Self::from_env_values(
+            std::env::var(BRINE_EXEC_SERVER_URL_ENV_VAR).ok(),
+            std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
+        )
+    }
+
+    fn from_env_values(brine_exec_server_url: Option<String>, codex_exec_server_url: Option<String>) -> Self {
+        Self::new(brine_exec_server_url.or(codex_exec_server_url))
     }
 
     pub(crate) fn snapshot_inner(&self) -> EnvironmentProviderSnapshot {
@@ -119,6 +131,30 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn brine_exec_server_url_takes_precedence_over_codex_url() {
+        let provider = DefaultEnvironmentProvider::from_env_values(
+            Some("ws://127.0.0.1:8766".to_string()),
+            Some("ws://127.0.0.1:8765".to_string()),
+        );
+        let (url, disabled) = normalize_exec_server_url(provider.exec_server_url);
+
+        assert_eq!(url.as_deref(), Some("ws://127.0.0.1:8766"));
+        assert!(!disabled);
+    }
+
+    #[test]
+    fn codex_exec_server_url_remains_the_fallback() {
+        let provider = DefaultEnvironmentProvider::from_env_values(
+            None,
+            Some("ws://127.0.0.1:8765".to_string()),
+        );
+        let (url, disabled) = normalize_exec_server_url(provider.exec_server_url);
+
+        assert_eq!(url.as_deref(), Some("ws://127.0.0.1:8765"));
+        assert!(!disabled);
+    }
 
     #[tokio::test]
     async fn default_provider_requests_local_environment_when_url_is_missing() {
