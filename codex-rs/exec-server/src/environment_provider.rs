@@ -72,7 +72,10 @@ impl DefaultEnvironmentProvider {
         )
     }
 
-    fn from_env_values(brine_exec_server_url: Option<String>, codex_exec_server_url: Option<String>) -> Self {
+    fn from_env_values(
+        brine_exec_server_url: Option<String>,
+        codex_exec_server_url: Option<String>,
+    ) -> Self {
         Self::new(brine_exec_server_url.or(codex_exec_server_url))
     }
 
