@@ -1,0 +1,26 @@
+name: BrineCDX CI
+
+on:
+  pull_request:
+    paths:
+      - "codex-rs/exec-server/**"
+      - ".brinecdx/**"
+      - ".github/workflows/brinecdx-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  exec-boundary:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust version
+        run: rustc --version && cargo --version
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Exec-server tests
+        run: cargo test -p codex-exec-server environment_provider --lib
