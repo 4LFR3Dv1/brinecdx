@@ -119,8 +119,7 @@ fn direct_mode_command(
         // shell program. Shell metacharacters remain ordinary argv bytes here;
         // they are never evaluated by a shell on the executor.
         let command = shlex_split(&args.cmd).ok_or_else(|| {
-            "Brine direct execution requires a command that can be represented as argv"
-                .to_string()
+            "Brine direct execution requires a command that can be represented as argv".to_string()
         })?;
         if command.is_empty() {
             return Err("Brine direct execution requires a non-empty command".to_string());
