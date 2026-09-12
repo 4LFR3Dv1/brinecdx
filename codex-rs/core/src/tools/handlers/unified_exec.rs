@@ -11,6 +11,7 @@ use codex_exec_server::Environment;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
 use serde::Deserialize;
+use shlex::split as shlex_split;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,6 +24,8 @@ mod write_stdin;
 pub use exec_command::ExecCommandHandler;
 pub(crate) use exec_command::ExecCommandHandlerOptions;
 pub use write_stdin::WriteStdinHandler;
+
+const BRINE_EXEC_SERVER_URL_ENV_VAR: &str = "BRINE_EXEC_SERVER_URL";
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
@@ -96,6 +99,49 @@ fn post_unified_exec_tool_use_payload(
     })
 }
 
+fn brine_exec_server_configured() -> bool {
+    std::env::var(BRINE_EXEC_SERVER_URL_ENV_VAR)
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn direct_mode_command(
+    args: &ExecCommandArgs,
+    session_shell: Arc<Shell>,
+    use_login_shell: bool,
+    brine_direct_argv: bool,
+) -> Result<ResolvedCommand, String> {
+    if brine_direct_argv {
+        // BRINE_EXEC_SERVER_URL is an explicit BrineCDX opt-in. Preserve the
+        // command as structured argv instead of re-wrapping it in the remote
+        // shell. Brine remains the authoritative admission boundary and can
+        // therefore prove/deny the executable and subcommand without parsing a
+        // shell program. Shell metacharacters remain ordinary argv bytes here;
+        // they are never evaluated by a shell on the executor.
+        let command = shlex_split(&args.cmd).ok_or_else(|| {
+            "Brine direct execution requires a command that can be represented as argv"
+                .to_string()
+        })?;
+        if command.is_empty() {
+            return Err("Brine direct execution requires a non-empty command".to_string());
+        }
+        return Ok(ResolvedCommand {
+            command,
+            shell_type: session_shell.shell_type,
+        });
+    }
+
+    let model_shell = args
+        .shell
+        .as_ref()
+        .map(|shell_str| get_shell_by_model_provided_path(&PathBuf::from(shell_str)));
+    let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+    Ok(ResolvedCommand {
+        command: shell.derive_exec_args(&args.cmd, use_login_shell),
+        shell_type: shell.shell_type,
+    })
+}
+
 pub(crate) fn get_command(
     args: &ExecCommandArgs,
     session_shell: Arc<Shell>,
@@ -113,17 +159,12 @@ pub(crate) fn get_command(
     };
 
     match shell_mode {
-        UnifiedExecShellMode::Direct => {
-            let model_shell = args
-                .shell
-                .as_ref()
-                .map(|shell_str| get_shell_by_model_provided_path(&PathBuf::from(shell_str)));
-            let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
-            Ok(ResolvedCommand {
-                command: shell.derive_exec_args(&args.cmd, use_login_shell),
-                shell_type: shell.shell_type,
-            })
-        }
+        UnifiedExecShellMode::Direct => direct_mode_command(
+            args,
+            session_shell,
+            use_login_shell,
+            brine_exec_server_configured(),
+        ),
         UnifiedExecShellMode::ZshFork(zsh_fork_config) => {
             if args.shell.is_some() {
                 return Err(
@@ -151,6 +192,62 @@ pub(crate) fn shell_mode_for_environment(
         UnifiedExecShellMode::Direct
     } else {
         turn_shell_mode.clone()
+    }
+}
+
+#[cfg(test)]
+mod brine_direct_argv_tests {
+    use super::*;
+    use crate::shell::default_user_shell;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn brine_direct_mode_preserves_git_as_structured_argv() -> anyhow::Result<()> {
+        let args: ExecCommandArgs = parse_arguments(r#"{"cmd":"git status --short"}"#)?;
+        let resolved = direct_mode_command(
+            &args,
+            Arc::new(default_user_shell()),
+            /*use_login_shell*/ false,
+            /*brine_direct_argv*/ true,
+        )
+        .map_err(anyhow::Error::msg)?;
+
+        assert_eq!(resolved.command, vec!["git", "status", "--short"]);
+        Ok(())
+    }
+
+    #[test]
+    fn brine_direct_mode_never_interprets_shell_operators() -> anyhow::Result<()> {
+        let args: ExecCommandArgs =
+            parse_arguments(r#"{"cmd":"git status --short && touch should-not-run"}"#)?;
+        let resolved = direct_mode_command(
+            &args,
+            Arc::new(default_user_shell()),
+            /*use_login_shell*/ false,
+            /*brine_direct_argv*/ true,
+        )
+        .map_err(anyhow::Error::msg)?;
+
+        assert_eq!(
+            resolved.command,
+            vec!["git", "status", "--short", "&&", "touch", "should-not-run"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn brine_direct_mode_fails_closed_on_unbalanced_quotes() -> anyhow::Result<()> {
+        let args: ExecCommandArgs = parse_arguments(r#"{"cmd":"git grep 'unterminated"}"#)?;
+        let error = direct_mode_command(
+            &args,
+            Arc::new(default_user_shell()),
+            /*use_login_shell*/ false,
+            /*brine_direct_argv*/ true,
+        )
+        .expect_err("unbalanced quotes must not fall back to a shell");
+
+        assert!(error.contains("represented as argv"));
+        Ok(())
     }
 }
 
