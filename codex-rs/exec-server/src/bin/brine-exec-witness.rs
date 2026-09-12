@@ -17,7 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manager = EnvironmentManager::from_env(None, http_client_factory).await?;
 
     if manager.default_environment_id() != Some(REMOTE_ENVIRONMENT_ID) {
-        return Err("Brine witness expected the remote exec-server to be the default environment".into());
+        return Err(
+            "Brine witness expected the remote exec-server to be the default environment".into(),
+        );
     }
 
     let deadline = Instant::now() + WITNESS_TIMEOUT;
@@ -38,7 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Some(EnvironmentObservedStatus::Disconnected { error }) => {
-                return Err(format!("Brine exec-server disconnected during live witness: {error}").into());
+                return Err(
+                    format!("Brine exec-server disconnected during live witness: {error}").into(),
+                );
             }
             Some(EnvironmentObservedStatus::Pending) => {}
             None => return Err("Brine remote environment disappeared during live witness".into()),
