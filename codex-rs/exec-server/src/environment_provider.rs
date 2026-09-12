@@ -150,7 +150,10 @@ impl EnvironmentProvider for DefaultEnvironmentProvider {
 
 fn brine_authorization_headers(token: Option<String>) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    let Some(token) = token.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) else {
+    let Some(token) = token
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
         return headers;
     };
     // Invalid header bytes fail closed by omitting the credential. The Brine
