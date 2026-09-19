@@ -15,6 +15,7 @@ use crate::structure::observe_structure;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceIdentity {
     pub workspace_key: String,
+    pub workspace_aliases: Vec<String>,
     pub repository_identity: String,
 }
 
@@ -34,6 +35,11 @@ pub fn identify_local_workspace(root: &Path) -> WorkspaceIdentity {
         sha256_hex(common_dir.to_string_lossy().as_bytes())
     );
 
+    let legacy_workspace_key = format!(
+        "local:{}",
+        sha256_hex(root.to_string_lossy().as_bytes())
+    );
+
     let repository_identity = git_output_optional(root, &["config", "--get", "remote.origin.url"])
         .and_then(|bytes| {
             let value = String::from_utf8_lossy(trim_ascii(&bytes)).into_owned();
@@ -42,8 +48,14 @@ pub fn identify_local_workspace(root: &Path) -> WorkspaceIdentity {
         .map(|origin| format!("origin-sha256:{}", sha256_hex(origin.as_bytes())))
         .unwrap_or_else(|| workspace_key.clone());
 
+    let workspace_aliases = (legacy_workspace_key != workspace_key)
+        .then_some(legacy_workspace_key)
+        .into_iter()
+        .collect();
+
     WorkspaceIdentity {
         workspace_key,
+        workspace_aliases,
         repository_identity,
     }
 }
