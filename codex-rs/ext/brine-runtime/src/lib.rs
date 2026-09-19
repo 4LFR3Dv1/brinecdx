@@ -4,6 +4,7 @@
 //! The local workspace root stays in the host thread store and is never sent to
 //! the authority or exposed as model-visible context.
 
+mod structure;
 mod workspace;
 
 use std::collections::HashSet;
