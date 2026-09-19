@@ -186,6 +186,98 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
     );
 }
 
+
+#[test]
+fn structural_revision_advances_only_when_structure_changes() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("runtime.json");
+    let authority = FileRuntimeAuthority::open(&path).expect("open authority");
+
+    let first = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("structure-session-1"),
+            workspace_key: "repo:structure".to_owned(),
+            repository_identity: "git:structure".to_owned(),
+            work_key: String::new(),
+            objective: "observe structure".to_owned(),
+            since_revision: None,
+            material: Some(material_observation_with_structure(
+                "head-a",
+                "material-a",
+                "structure-a",
+                "src/lib.rs",
+            )),
+        })
+        .expect("attach first structural snapshot");
+    let first_state = first
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("workspace material");
+    assert_eq!(first_state.material_revision, 1);
+    assert_eq!(first_state.structural_revision, 1);
+
+    let material_only = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("structure-session-2"),
+            workspace_key: "repo:structure".to_owned(),
+            repository_identity: "git:structure".to_owned(),
+            work_key: String::new(),
+            objective: "observe structure".to_owned(),
+            since_revision: Some(first.state.revision),
+            material: Some(material_observation_with_structure(
+                "head-a",
+                "material-b",
+                "structure-a",
+                "src/lib.rs",
+            )),
+        })
+        .expect("attach material-only change");
+    let material_only_state = material_only
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("workspace material");
+    assert_eq!(material_only_state.material_revision, 2);
+    assert_eq!(material_only_state.structural_revision, 1);
+
+    let structural = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("structure-session-3"),
+            workspace_key: "repo:structure".to_owned(),
+            repository_identity: "git:structure".to_owned(),
+            work_key: String::new(),
+            objective: "observe structure".to_owned(),
+            since_revision: Some(material_only.state.revision),
+            material: Some(material_observation_with_structure(
+                "head-a",
+                "material-c",
+                "structure-b",
+                "src/lib.rs",
+            )),
+        })
+        .expect("attach structural change");
+    let structural_state = structural
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("workspace material");
+    assert_eq!(structural_state.material_revision, 3);
+    assert_eq!(structural_state.structural_revision, 2);
+}
+
+
+fn material_observation_with_structure(
+    head: &str,
+    material_digest: &str,
+    structure_digest: &str,
+    changed_path: &str,
+) -> WorkspaceMaterialObservation {
+    let mut observation = material_observation(head, material_digest, changed_path);
+    observation.structure.digest = structure_digest.to_owned();
+    observation
+}
+
 fn material_observation(
     head: &str,
     material_digest: &str,
