@@ -6,8 +6,11 @@
 
 mod workspace;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 
 use codex_brine_runtime::AttachRequest;
 use codex_brine_runtime::AttachmentSnapshot;
@@ -17,12 +20,18 @@ use codex_brine_runtime::RuntimeAuthorityError;
 use codex_brine_runtime::RuntimeState;
 use codex_brine_runtime::SessionAttachment;
 use codex_brine_runtime::SessionId;
+use codex_extension_api::CommandStartInput;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
+use codex_extension_api::ToolCallOutcome;
+use codex_extension_api::ToolFinishInput;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolStartInput;
 
 pub use workspace::observe_local_workspace;
 
@@ -98,7 +107,30 @@ pub fn install<C: Sync + 'static>(
     authority: Arc<dyn RuntimeAuthority>,
     config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
 ) {
-    builder.thread_lifecycle_contributor(Arc::new(BrineRuntimeExtension::new(authority, config)));
+    let extension = Arc::new(BrineRuntimeExtension::new(authority, config));
+    builder.thread_lifecycle_contributor(extension.clone());
+    builder.tool_lifecycle_contributor(extension);
+}
+
+#[derive(Debug, Default)]
+struct PotentialMutationCalls {
+    call_ids: Mutex<HashSet<String>>,
+}
+
+impl PotentialMutationCalls {
+    fn insert(&self, call_id: &str) {
+        self.call_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(call_id.to_owned());
+    }
+
+    fn remove(&self, call_id: &str) -> bool {
+        self.call_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(call_id)
+    }
 }
 
 impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
@@ -163,6 +195,88 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             }
         })
     }
+}
+
+impl<C> ToolLifecycleContributor for BrineRuntimeExtension<C> {
+    fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            if matches!(
+                input.tool_name.name.as_str(),
+                "apply_patch" | "write_file" | "edit_file"
+            ) {
+                input
+                    .thread_store
+                    .get_or_init(PotentialMutationCalls::default)
+                    .insert(input.call_id);
+            }
+        })
+    }
+
+    fn on_command_start<'a>(&'a self, input: CommandStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            input
+                .thread_store
+                .get_or_init(PotentialMutationCalls::default)
+                .insert(input.call_id);
+        })
+    }
+
+    fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            let Some(calls) = input.thread_store.get::<PotentialMutationCalls>() else {
+                return;
+            };
+            if !calls.remove(input.call_id) || !outcome_may_have_mutated(input.outcome) {
+                return;
+            }
+            self.reconcile_material_after_tool(input.thread_store);
+        })
+    }
+}
+
+impl<C> BrineRuntimeExtension<C> {
+    fn reconcile_material_after_tool(&self, thread_store: &codex_extension_api::ExtensionData) {
+        let Some(current) = thread_store.get::<AttachedRuntime>() else {
+            return;
+        };
+        let Some(material) = observe_material_or_warn(&current.local_workspace) else {
+            return;
+        };
+        if current
+            .state
+            .workspace_material
+            .as_ref()
+            .is_some_and(|state| state.observation.material_digest == material.material_digest)
+        {
+            return;
+        }
+
+        let result = self.authority.reconcile(ReconcileRequest {
+            session_id: current.remote.session_id.clone(),
+            workspace_id: current.remote.workspace_id.clone(),
+            work_id: current.remote.work_id.clone(),
+            since_revision: Some(current.remote.attached_revision),
+            material: Some(material),
+        });
+        match result {
+            Ok(snapshot) => {
+                let attached = attached_runtime(snapshot, current.local_workspace.clone());
+                log_attachment_success("tool_reconcile", &attached);
+                thread_store.insert(attached);
+            }
+            Err(error) => log_attachment_error("tool_reconcile", error),
+        }
+    }
+}
+
+fn outcome_may_have_mutated(outcome: ToolCallOutcome) -> bool {
+    !matches!(
+        outcome,
+        ToolCallOutcome::Blocked
+            | ToolCallOutcome::Failed {
+                handler_executed: false
+            }
+    )
 }
 
 fn observe_material_or_warn(
