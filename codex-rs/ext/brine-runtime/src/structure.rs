@@ -83,6 +83,17 @@ pub(crate) fn observe_structure(root: &Path) -> Result<WorkspaceStructureObserva
     })
 }
 
+pub(crate) fn is_source_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            SOURCE_EXTENSIONS
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
 fn source_paths(root: &Path) -> Result<Vec<String>, String> {
     let output = Command::new("git")
         .arg("-C")
@@ -102,16 +113,7 @@ fn source_paths(root: &Path) -> Result<Vec<String>, String> {
         .split(|byte| *byte == 0)
         .filter(|value| !value.is_empty())
         .map(|value| String::from_utf8_lossy(value).replace('\\', "/"))
-        .filter(|path| {
-            Path::new(path)
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|extension| {
-                    SOURCE_EXTENSIONS
-                        .iter()
-                        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-                })
-        })
+        .filter(|path| is_source_path(path))
         .collect();
     paths.sort();
     paths.dedup();
