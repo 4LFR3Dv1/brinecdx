@@ -84,6 +84,71 @@ fn authority_survives_session_and_replays_remote_delta() {
     assert!(reconciled.state.pending_deltas.is_empty());
 }
 
+
+#[test]
+fn workspace_alias_migrates_r1_identity_without_forking_work() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("runtime.json");
+    let authority = FileRuntimeAuthority::open(&path).expect("open authority");
+
+    let legacy_key = "local:legacy-cwd-hash";
+    let first = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("legacy-session"),
+            workspace_key: legacy_key.to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: legacy_key.to_owned(),
+            work_key: String::new(),
+            objective: "persistent root work".to_owned(),
+            since_revision: None,
+            material: None,
+        })
+        .expect("attach legacy workspace");
+
+    let migrated = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("migrated-session"),
+            workspace_key: "local-git:new-common-dir-hash".to_owned(),
+            workspace_aliases: vec![legacy_key.to_owned()],
+            repository_identity: "origin-sha256:repo".to_owned(),
+            work_key: String::new(),
+            objective: "persistent root work".to_owned(),
+            since_revision: Some(first.state.revision),
+            material: None,
+        })
+        .expect("attach migrated workspace");
+
+    assert_eq!(
+        migrated.attachment.workspace_id,
+        first.attachment.workspace_id
+    );
+    assert_eq!(migrated.attachment.work_id, first.attachment.work_id);
+    assert_eq!(
+        migrated.state.workspace.key,
+        "local-git:new-common-dir-hash"
+    );
+    assert_eq!(
+        migrated.state.workspace.repository_identity,
+        "origin-sha256:repo"
+    );
+
+    let persisted: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(path).expect("read persisted runtime"),
+    )
+    .expect("parse persisted runtime");
+    assert_eq!(
+        persisted["workspaces"]
+            .as_object()
+            .expect("workspace map")
+            .len(),
+        1
+    );
+    assert_eq!(
+        persisted["works"].as_object().expect("work map").len(),
+        1
+    );
+}
+
 #[test]
 fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
     let directory = tempdir().expect("temp directory");
