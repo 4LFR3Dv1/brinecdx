@@ -9,6 +9,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use crate::LocalWorkspace;
+use crate::structure::is_source_path;
 use crate::structure::observe_structure;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +54,13 @@ pub fn identify_local_workspace(root: &Path) -> WorkspaceIdentity {
 /// so an unchanged workspace does not require a full repository rehash.
 pub fn observe_local_workspace(
     workspace: &LocalWorkspace,
+) -> Result<Option<WorkspaceMaterialObservation>, String> {
+    observe_local_workspace_with_previous(workspace, None)
+}
+
+pub(crate) fn observe_local_workspace_with_previous(
+    workspace: &LocalWorkspace,
+    previous: Option<&WorkspaceMaterialObservation>,
 ) -> Result<Option<WorkspaceMaterialObservation>, String> {
     let root = workspace.root.as_path();
     let Some(inside) = git_output_optional(root, &["rev-parse", "--is-inside-work-tree"]) else {
@@ -120,7 +128,14 @@ pub fn observe_local_workspace(
         material_basis.push(0);
     }
     let material_digest = hash_bytes(&material_basis)?;
-    let structure = observe_structure(root)?;
+    let structure = previous
+        .filter(|previous| {
+            previous.material_digest == material_digest
+                || (previous.head == head && !changed_paths.iter().any(|path| is_source_path(path)))
+        })
+        .map(|previous| previous.structure.clone())
+        .map(Ok)
+        .unwrap_or_else(|| observe_structure(root))?;
 
     Ok(Some(WorkspaceMaterialObservation {
         head,
