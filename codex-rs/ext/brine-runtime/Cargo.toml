@@ -1,0 +1,17 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-brine-runtime-extension"
+version.workspace = true
+
+[lib]
+name = "codex_brine_runtime_extension"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-brine-runtime = { workspace = true }
+codex-extension-api = { workspace = true }
+tracing = { workspace = true }

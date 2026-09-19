@@ -6,6 +6,7 @@ members = [
     "agent-identity",
     "agent-roles",
     "backend-client",
+    "brine-runtime",
     "bwrap",
     "build-info",
     "ansi-escape",
@@ -58,6 +59,7 @@ members = [
     "exec-server/tests/support",
     "execpolicy",
     "ext/agent",
+    "ext/brine-runtime",
     "ext/connectors",
     "ext/extension-api",
     "ext/goal",
@@ -184,6 +186,7 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
+codex-brine-runtime = { path = "brine-runtime" }
 codex-build-info = { path = "build-info" }
 codex-chatgpt = { path = "chatgpt" }
 codex-client = { path = "codex-client" }
@@ -200,6 +203,7 @@ codex-websocket-client = { path = "websocket-client" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-agent-extension = { path = "ext/agent" }
+codex-brine-runtime-extension = { path = "ext/brine-runtime" }
 codex-connectors-extension = { path = "ext/connectors" }
 codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }

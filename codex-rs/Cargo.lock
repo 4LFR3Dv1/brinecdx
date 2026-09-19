@@ -2538,6 +2538,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-brine-runtime"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "codex-brine-runtime-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-brine-runtime",
+ "codex-extension-api",
+ "tracing",
+]
+
+[[package]]
 name = "codex-build-info"
 version = "0.0.0"
 dependencies = [
