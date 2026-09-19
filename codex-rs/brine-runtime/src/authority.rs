@@ -250,16 +250,31 @@ impl PersistedRuntimeState {
             return;
         }
 
-        let material_revision = self
-            .workspace_material
-            .get(workspace_id.as_str())
+        let previous = self.workspace_material.get(workspace_id.as_str());
+        let material_revision = previous
             .map(|state| state.material_revision + 1)
             .unwrap_or(1);
+        let structure_digest = &observation.structure.digest;
+        let structural_revision = if structure_digest.is_empty() {
+            previous.map(|state| state.structural_revision).unwrap_or(0)
+        } else if previous.is_some_and(|state| {
+            state.observation.structure.digest == *structure_digest
+        }) {
+            previous
+                .map(|state| state.structural_revision)
+                .unwrap_or(1)
+        } else {
+            previous
+                .map(|state| state.structural_revision.saturating_add(1).max(1))
+                .unwrap_or(1)
+        };
+
         self.revision += 1;
         let runtime_revision = self.revision;
         let material_state = WorkspaceMaterialState {
             workspace_id: workspace_id.clone(),
             material_revision,
+            structural_revision,
             runtime_revision,
             observation: observation.clone(),
         };
@@ -268,8 +283,10 @@ impl PersistedRuntimeState {
         self.workspace_revisions.push(WorkspaceRevisionRecord {
             workspace_id: workspace_id.clone(),
             material_revision,
+            structural_revision,
             runtime_revision,
             material_digest: observation.material_digest.clone(),
+            structure_digest: observation.structure.digest.clone(),
             head: observation.head.clone(),
             changed_paths: observation.changed_paths.clone(),
         });
