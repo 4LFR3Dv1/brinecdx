@@ -18,6 +18,7 @@ fn authority_survives_session_and_replays_remote_delta() {
         .attach(AttachRequest {
             session_id: SessionId::from("codex-session-1"),
             workspace_key: "repo:brinecdx".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
             work_key: "work:runtime-reset".to_owned(),
             objective: "implement R1".to_owned(),
@@ -51,6 +52,7 @@ fn authority_survives_session_and_replays_remote_delta() {
         .attach(AttachRequest {
             session_id: SessionId::from("codex-session-2"),
             workspace_key: "repo:brinecdx".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
             work_key: "work:runtime-reset".to_owned(),
             objective: "implement R1".to_owned(),
@@ -92,6 +94,7 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
         .attach(AttachRequest {
             session_id: SessionId::from("material-session-1"),
             workspace_key: "repo:material".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:material".to_owned(),
             work_key: String::new(),
             objective: "observe material".to_owned(),
@@ -111,6 +114,7 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
         .attach(AttachRequest {
             session_id: SessionId::from("material-session-2"),
             workspace_key: "repo:material".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:material".to_owned(),
             work_key: String::new(),
             objective: "observe material".to_owned(),
@@ -132,6 +136,7 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
         .attach(AttachRequest {
             session_id: SessionId::from("material-session-3"),
             workspace_key: "repo:material".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:material".to_owned(),
             work_key: String::new(),
             objective: "observe material".to_owned(),
@@ -155,6 +160,7 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
         .attach(AttachRequest {
             session_id: SessionId::from("material-session-4"),
             workspace_key: "repo:material".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:material".to_owned(),
             work_key: String::new(),
             objective: "observe material".to_owned(),
@@ -197,6 +203,7 @@ fn structural_revision_advances_only_when_structure_changes() {
         .attach(AttachRequest {
             session_id: SessionId::from("structure-session-1"),
             workspace_key: "repo:structure".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:structure".to_owned(),
             work_key: String::new(),
             objective: "observe structure".to_owned(),
@@ -221,6 +228,7 @@ fn structural_revision_advances_only_when_structure_changes() {
         .attach(AttachRequest {
             session_id: SessionId::from("structure-session-2"),
             workspace_key: "repo:structure".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:structure".to_owned(),
             work_key: String::new(),
             objective: "observe structure".to_owned(),
@@ -245,6 +253,7 @@ fn structural_revision_advances_only_when_structure_changes() {
         .attach(AttachRequest {
             session_id: SessionId::from("structure-session-3"),
             workspace_key: "repo:structure".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:structure".to_owned(),
             work_key: String::new(),
             objective: "observe structure".to_owned(),
