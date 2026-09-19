@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
 #
-# BrineCDX launcher (BCDX-WP-02).
+# BrineCDX launcher.
 #
-# Starts the Codex CLI from this checkout against the Brine execution
-# environment with the ChatGPT-backed provider selected explicitly. The
-# machine-wide ~/.codex/config.toml is never modified: every BrineCDX-owned
-# setting is passed as a `-c` override, and later user arguments win over the
-# launcher defaults.
-#
-# BrineCDX fails closed. BRINE_EXEC_SERVER_URL must name a Brine exec-server and
-# must not be `none`; there is no host-local execution fallback.
+# Local Codex execution is the default. The legacy Brine exec-server path is
+# available only through BRINECDX_EXECUTION_MODE=remote.
 
 set -euo pipefail
 
@@ -21,31 +15,16 @@ usage() {
   cat <<'EOF'
 Usage: brinecdx [codex-args...]
 
-Launcher-owned Codex settings (override with later `-c` arguments):
-  model                   gpt-5.6-sol   (BRINECDX_MODEL)
-  model_provider          openai        (BRINECDX_MODEL_PROVIDER)
-  model_reasoning_effort  medium        (BRINECDX_REASONING_EFFORT)
-  model_catalog_json      codex-rs/models-manager/models.json (BRINECDX_MODEL_CATALOG)
-  forced_login_method     chatgpt
-
-The catalog override escapes machine-wide model catalogs that do not contain
-the Codex models, and forced_login_method=chatgpt escapes API-key-only login
-policies. Both exist because ~/.codex/config.toml may be configured for another
-provider.
-
-Required:
-  BRINE_EXEC_SERVER_URL   ws:// or wss:// endpoint of the Brine exec-server.
-                          BrineCDX never falls back to host-local execution.
+Execution:
+  local   default; execute directly on this host through Codex.
+  remote  set BRINECDX_EXECUTION_MODE=remote and BRINE_EXEC_SERVER_URL.
 
 Optional:
-  BRINE_EXEC_SERVER_TOKEN Codex sends this as `Authorization: Bearer <token>`.
-  BRINECDX_CODEX_BIN      run this Codex binary instead of `cargo run`.
-  BRINECDX_DRY_RUN=1      print the resolved argv and exit without running.
-
-Example:
-  export BRINE_EXEC_SERVER_URL=wss://brine.example/exec
-  export BRINE_EXEC_SERVER_TOKEN=...
-  scripts/brinecdx.sh
+  BRINECDX_EXECUTION_MODE local|remote (default: local)
+  BRINE_EXEC_SERVER_URL   required only in remote mode
+  BRINE_EXEC_SERVER_TOKEN optional bearer token in remote mode
+  BRINECDX_CODEX_BIN      run this Codex binary instead of cargo run
+  BRINECDX_DRY_RUN=1      print resolved argv and exit
 EOF
 }
 
@@ -54,8 +33,6 @@ fail() {
   exit 2
 }
 
-# Pass values as TOML literal strings so Windows paths and shell
-# metacharacters survive the config round-trip unchanged.
 toml_literal() {
   case "$1" in
     *"'"*) fail "value must not contain a single quote: $1" ;;
@@ -75,23 +52,27 @@ model="${BRINECDX_MODEL:-$default_model}"
 model_provider="${BRINECDX_MODEL_PROVIDER:-$default_model_provider}"
 reasoning_effort="${BRINECDX_REASONING_EFFORT:-$default_reasoning_effort}"
 catalog="${BRINECDX_MODEL_CATALOG:-$repo_root/codex-rs/models-manager/models.json}"
+execution_mode="${BRINECDX_EXECUTION_MODE:-local}"
+execution_mode="$(printf '%s' "$execution_mode" | tr '[:upper:]' '[:lower:]')"
 
-brine_url="$(printf '%s' "${BRINE_EXEC_SERVER_URL:-}" | tr -d '[:space:]')"
-if [[ -z "$brine_url" ]]; then
-  fail "BRINE_EXEC_SERVER_URL is not set; BrineCDX has no host-local fallback"
-fi
-if [[ "${brine_url,,}" == "none" ]]; then
-  fail "BRINE_EXEC_SERVER_URL=none disables execution; BrineCDX requires a Brine endpoint"
-fi
+case "$execution_mode" in
+  local|remote) ;;
+  *) fail "BRINECDX_EXECUTION_MODE must be 'local' or 'remote'" ;;
+esac
+
 if [[ ! -f "$catalog" ]]; then
   fail "model catalog not found: $catalog"
 fi
 
-if [[ -n "${BRINE_EXEC_SERVER_TOKEN:-}" ]]; then
-  token_state='set'
-else
+if [[ "$execution_mode" == "remote" ]]; then
+  brine_url="$(printf '%s' "${BRINE_EXEC_SERVER_URL:-}" | tr -d '[:space:]')"
+  [[ -n "$brine_url" ]] || fail "remote execution requires BRINE_EXEC_SERVER_URL"
+  [[ "${brine_url,,}" != "none" ]] || fail "BRINE_EXEC_SERVER_URL=none disables remote execution"
   token_state='unset'
-  printf 'brinecdx: warning: BRINE_EXEC_SERVER_TOKEN is unset; the Brine endpoint must accept an unauthenticated upgrade\n' >&2
+  [[ -n "${BRINE_EXEC_SERVER_TOKEN:-}" ]] && token_state='set'
+  printf 'brinecdx: execution=remote endpoint=%s token=%s\n' "$brine_url" "$token_state" >&2
+else
+  printf 'brinecdx: execution=local\n' >&2
 fi
 
 overrides=(
@@ -103,13 +84,18 @@ overrides=(
 )
 
 printf 'brinecdx: model=%s provider=%s effort=%s\n' "$model" "$model_provider" "$reasoning_effort" >&2
-printf 'brinecdx: brine exec-server=%s token=%s\n' "$brine_url" "$token_state" >&2
 
 if [[ "${BRINECDX_DRY_RUN:-}" == '1' ]]; then
   for argument in "${overrides[@]}" "$@"; do
     printf 'brinecdx-argv: %s\n' "$argument"
   done
   exit 0
+fi
+
+if [[ "$execution_mode" == "local" ]]; then
+  unset BRINE_EXEC_SERVER_URL
+  unset BRINE_EXEC_SERVER_TOKEN
+  unset CODEX_EXEC_SERVER_URL
 fi
 
 if [[ -n "${BRINECDX_CODEX_BIN:-}" ]]; then
