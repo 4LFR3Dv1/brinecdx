@@ -2184,6 +2184,8 @@ dependencies = [
  "codex-arg0",
  "codex-aws-auth",
  "codex-backend-client",
+ "codex-brine-runtime",
+ "codex-brine-runtime-extension",
  "codex-chatgpt",
  "codex-cloud-config",
  "codex-code-mode",

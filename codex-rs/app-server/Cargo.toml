@@ -67,6 +67,8 @@ codex-utils-cli = { workspace = true }
 codex-user-verification = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-backend-client = { workspace = true }
+codex-brine-runtime = { workspace = true }
+codex-brine-runtime-extension = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }

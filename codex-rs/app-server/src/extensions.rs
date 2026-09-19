@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
@@ -8,6 +9,9 @@ use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_app_server_protocol::WarningNotification;
+use codex_brine_runtime::TcpRuntimeAuthority;
+use codex_brine_runtime_extension::LocalWorkspace;
+use codex_brine_runtime_extension::SessionAttachmentConfig;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
@@ -25,6 +29,8 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_queue_extension::QueuedItemService;
 use codex_rollout::state_db::StateDbHandle;
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
@@ -67,6 +73,29 @@ pub(crate) fn thread_extensions(
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::clone(&event_sink));
     if let Some(admission) = turn_start_admission {
         builder.turn_start_admission(admission);
+    }
+    if let Some(address) = brine_runtime_authority_address() {
+        codex_brine_runtime_extension::install(
+            &mut builder,
+            Arc::new(TcpRuntimeAuthority::new(address)),
+            |config: &Config| {
+                let root = config.cwd.as_path().to_path_buf();
+                let workspace_identity = format!(
+                    "local:{:x}",
+                    Sha256::digest(root.to_string_lossy().as_bytes())
+                );
+                Some(SessionAttachmentConfig {
+                    workspace_key: workspace_identity.clone(),
+                    repository_identity: workspace_identity.clone(),
+                    work_key: String::new(),
+                    objective: "BrineCDX workspace work".to_owned(),
+                    local_workspace: LocalWorkspace {
+                        root,
+                        repository_identity: workspace_identity,
+                    },
+                })
+            },
+        );
     }
     if let Some(queue_service) = queue_service {
         codex_queue_extension::install(&mut builder, queue_service);
@@ -121,6 +150,21 @@ pub(crate) fn thread_extensions(
         },
     );
     Arc::new(builder.build())
+}
+
+fn brine_runtime_authority_address() -> Option<SocketAddr> {
+    let value = std::env::var("BRINECDX_RUNTIME_AUTHORITY_ADDR").ok()?;
+    match value.parse() {
+        Ok(address) => Some(address),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                value,
+                "ignoring invalid BRINECDX_RUNTIME_AUTHORITY_ADDR"
+            );
+            None
+        }
+    }
 }
 
 pub(crate) fn app_server_extension_event_sink(

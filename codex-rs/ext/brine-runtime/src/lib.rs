@@ -98,11 +98,16 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 return;
             };
             let session_id = SessionId::from(input.session_store.level_id());
+            let work_key = if config.work_key.is_empty() {
+                input.thread_store.level_id().to_owned()
+            } else {
+                config.work_key.clone()
+            };
             let result = self.authority.attach(AttachRequest {
                 session_id,
                 workspace_key: config.workspace_key,
                 repository_identity: config.repository_identity.clone(),
-                work_key: config.work_key,
+                work_key,
                 objective: config.objective,
                 since_revision: None,
             });
