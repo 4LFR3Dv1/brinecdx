@@ -16,6 +16,7 @@ pub use model::AttachRequest;
 pub use model::AttachmentSnapshot;
 pub use model::ReconcileRequest;
 pub use model::RemoteDelta;
+pub use model::RUNTIME_PROTOCOL_VERSION;
 pub use model::RuntimeState;
 pub use model::SessionAttachment;
 pub use model::SessionId;
