@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
+$invocationCwd = (Get-Location).Path
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $factoryRoot = Split-Path -Parent $repoRoot
 $runtimeAddress = '127.0.0.1:4545'
@@ -86,5 +87,17 @@ if (-not (Assert-ExpectedListener -Listener $appServerListener -ExpectedProcessN
     Wait-Listener -Port $appServerPort
 }
 
-& $codexExe --remote $appServerUrl @args
+$hasExplicitCwd = $false
+for ($i = 0; $i -lt $args.Count; $i++) {
+    if ($args[$i] -eq '-C' -or $args[$i] -eq '--cd' -or $args[$i] -like '--cd=*') {
+        $hasExplicitCwd = $true
+        break
+    }
+}
+
+if ($hasExplicitCwd) {
+    & $codexExe --remote $appServerUrl @args
+} else {
+    & $codexExe --remote $appServerUrl --cd $invocationCwd @args
+}
 exit $LASTEXITCODE
