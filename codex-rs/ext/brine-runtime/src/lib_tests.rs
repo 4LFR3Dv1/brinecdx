@@ -3,6 +3,7 @@ use std::sync::Arc;
 use codex_brine_runtime::AttachmentSnapshot;
 use codex_brine_runtime::InMemoryRuntimeAuthority;
 use codex_brine_runtime::RemoteDelta;
+use codex_brine_runtime::RUNTIME_PROTOCOL_VERSION;
 use codex_brine_runtime::RuntimeState;
 use codex_brine_runtime::SessionAttachment;
 use codex_brine_runtime::SessionId;
@@ -17,6 +18,7 @@ use super::LocalWorkspace;
 use super::attached_runtime;
 use super::install;
 use super::outcome_may_have_mutated;
+use super::snapshot_protocol_compatible;
 
 #[test]
 fn install_registers_runtime_observers_without_model_context() {
@@ -39,6 +41,7 @@ fn attachment_retains_runtime_revision_and_pending_deltas() {
     let work_id = WorkId::from("work-1");
     let session_id = SessionId::from("session-2");
     let snapshot = AttachmentSnapshot {
+        protocol_version: RUNTIME_PROTOCOL_VERSION,
         attachment: SessionAttachment {
             session_id,
             workspace_id: workspace_id.clone(),
@@ -91,6 +94,43 @@ fn attachment_retains_runtime_revision_and_pending_deltas() {
         "second offline delta"
     );
     assert_eq!(attached.local_workspace, local_workspace);
+}
+
+
+#[test]
+fn incompatible_runtime_protocol_is_rejected() {
+    let workspace_id = WorkspaceId::from("workspace-protocol");
+    let work_id = WorkId::from("work-protocol");
+    let snapshot = AttachmentSnapshot {
+        protocol_version: RUNTIME_PROTOCOL_VERSION + 1,
+        attachment: SessionAttachment {
+            session_id: SessionId::from("session-protocol"),
+            workspace_id: workspace_id.clone(),
+            work_id: work_id.clone(),
+            attached_revision: 1,
+        },
+        state: RuntimeState {
+            revision: 1,
+            workspace: WorkspaceRecord {
+                id: workspace_id.clone(),
+                key: "repo".to_owned(),
+                repository_identity: "repo".to_owned(),
+                created_revision: 1,
+            },
+            work: WorkRecord {
+                id: work_id,
+                workspace_id,
+                key: "root".to_owned(),
+                objective: "protocol test".to_owned(),
+                created_revision: 1,
+                last_revision: 1,
+            },
+            workspace_material: None,
+            pending_deltas: Vec::new(),
+        },
+    };
+
+    assert!(!snapshot_protocol_compatible("test", &snapshot));
 }
 
 #[test]
