@@ -1,13 +1,9 @@
-# BrineCDX launcher (BCDX-WP-02).
+# BrineCDX launcher.
 #
-# Windows counterpart of scripts/brinecdx.sh. Starts the Codex CLI from this
-# checkout against the Brine execution environment with the ChatGPT-backed
-# provider selected explicitly. The machine-wide ~/.codex/config.toml is never
-# modified: every BrineCDX-owned setting is passed as a `-c` override, and later
-# user arguments win over the launcher defaults.
+# Local Codex execution is the default. The legacy Brine exec-server path is
+# available only through BRINECDX_EXECUTION_MODE=remote.
 #
-# BrineCDX fails closed. BRINE_EXEC_SERVER_URL must name a Brine exec-server and
-# must not be `none`; there is no host-local execution fallback.
+# Model/provider overrides remain until the broader R0 reset removes them.
 
 [CmdletBinding()]
 param(
@@ -23,13 +19,11 @@ $DefaultReasoningEffort = 'medium'
 
 function Write-LauncherError {
     param([string] $Message)
-
     [Console]::Error.WriteLine("brinecdx: $Message")
 }
 
 function Fail {
     param([string] $Message)
-
     Write-LauncherError $Message
     exit 2
 }
@@ -38,6 +32,10 @@ function Show-Usage {
     @'
 Usage: brinecdx [codex-args...]
 
+Execution:
+  local   default; execute directly on this host through Codex.
+  remote  set BRINECDX_EXECUTION_MODE=remote and BRINE_EXEC_SERVER_URL.
+
 Launcher-owned Codex settings (override with later `-c` arguments):
   model                   gpt-5.6-sol   (BRINECDX_MODEL)
   model_provider          openai        (BRINECDX_MODEL_PROVIDER)
@@ -45,48 +43,37 @@ Launcher-owned Codex settings (override with later `-c` arguments):
   model_catalog_json      codex-rs/models-manager/models.json (BRINECDX_MODEL_CATALOG)
   forced_login_method     chatgpt
 
-The catalog override escapes machine-wide model catalogs that do not contain
-the Codex models, and forced_login_method=chatgpt escapes API-key-only login
-policies. Both exist because ~/.codex/config.toml may be configured for another
-provider.
-
-Required:
-  BRINE_EXEC_SERVER_URL   ws:// or wss:// endpoint of the Brine exec-server.
-                          BrineCDX never falls back to host-local execution.
-
 Optional:
-  BRINE_EXEC_SERVER_TOKEN Codex sends this as `Authorization: Bearer <token>`.
-  BRINECDX_CODEX_BIN      run this Codex binary instead of `cargo run`.
-  BRINECDX_DRY_RUN=1      print the resolved argv and exit without running.
-
-Example:
-  $env:BRINE_EXEC_SERVER_URL = 'wss://brine.example/exec'
-  $env:BRINE_EXEC_SERVER_TOKEN = '...'
-  scripts/brinecdx.ps1
+  BRINECDX_EXECUTION_MODE local|remote (default: local)
+  BRINE_EXEC_SERVER_URL   required only in remote mode
+  BRINE_EXEC_SERVER_TOKEN optional bearer token in remote mode
+  BRINECDX_CODEX_BIN      run this Codex binary instead of cargo run
+  BRINECDX_DRY_RUN=1      print resolved argv and exit
 '@ | Write-Host
 }
 
 function Get-EnvValue {
     param([string] $Name)
-
     $value = [Environment]::GetEnvironmentVariable($Name)
-    if ($null -eq $value) {
-        return $null
-    }
-
+    if ($null -eq $value) { return $null }
     return $value.Trim()
 }
 
-# Pass values as TOML literal strings so Windows paths and shell
-# metacharacters survive the config round-trip unchanged.
 function ConvertTo-TomlLiteral {
     param([string] $Value)
-
     if ($Value.Contains("'")) {
         Fail "value must not contain a single quote: $Value"
     }
-
     return "'$Value'"
+}
+
+function Restore-EnvValue {
+    param([string] $Name, [AllowNull()][string] $Value)
+    if ($null -eq $Value) {
+        Remove-Item -LiteralPath "Env:$Name" -ErrorAction SilentlyContinue
+    } else {
+        Set-Item -LiteralPath "Env:$Name" -Value $Value
+    }
 }
 
 if ($CodexArgs -contains '--brinecdx-help') {
@@ -107,24 +94,31 @@ if (-not $ReasoningEffort) { $ReasoningEffort = $DefaultReasoningEffort }
 
 $Catalog = Get-EnvValue 'BRINECDX_MODEL_CATALOG'
 if (-not $Catalog) { $Catalog = Join-Path $RepoRoot 'codex-rs\models-manager\models.json' }
-
-$BrineUrl = Get-EnvValue 'BRINE_EXEC_SERVER_URL'
-if (-not $BrineUrl) {
-    Fail 'BRINE_EXEC_SERVER_URL is not set; BrineCDX has no host-local fallback'
-}
-if ($BrineUrl -eq 'none') {
-    Fail 'BRINE_EXEC_SERVER_URL=none disables execution; BrineCDX requires a Brine endpoint'
-}
 if (-not (Test-Path -LiteralPath $Catalog -PathType Leaf)) {
     Fail "model catalog not found: $Catalog"
 }
 
+$ExecutionMode = Get-EnvValue 'BRINECDX_EXECUTION_MODE'
+if (-not $ExecutionMode) { $ExecutionMode = 'local' }
+$ExecutionMode = $ExecutionMode.ToLowerInvariant()
+if ($ExecutionMode -notin @('local', 'remote')) {
+    Fail "BRINECDX_EXECUTION_MODE must be 'local' or 'remote'"
+}
+
+$BrineUrl = Get-EnvValue 'BRINE_EXEC_SERVER_URL'
 $Token = Get-EnvValue 'BRINE_EXEC_SERVER_TOKEN'
-if ($Token) {
-    $TokenState = 'set'
+
+if ($ExecutionMode -eq 'remote') {
+    if (-not $BrineUrl) {
+        Fail 'remote execution requires BRINE_EXEC_SERVER_URL'
+    }
+    if ($BrineUrl -eq 'none') {
+        Fail 'BRINE_EXEC_SERVER_URL=none disables remote execution'
+    }
+    $TokenState = if ($Token) { 'set' } else { 'unset' }
+    [Console]::Error.WriteLine("brinecdx: execution=remote endpoint=$BrineUrl token=$TokenState")
 } else {
-    $TokenState = 'unset'
-    Write-LauncherError 'warning: BRINE_EXEC_SERVER_TOKEN is unset; the Brine endpoint must accept an unauthenticated upgrade'
+    [Console]::Error.WriteLine('brinecdx: execution=local')
 }
 
 $Overrides = @(
@@ -136,28 +130,45 @@ $Overrides = @(
 )
 
 [Console]::Error.WriteLine("brinecdx: model=$Model provider=$ModelProvider effort=$ReasoningEffort")
-[Console]::Error.WriteLine("brinecdx: brine exec-server=$BrineUrl token=$TokenState")
 
 if ((Get-EnvValue 'BRINECDX_DRY_RUN') -eq '1') {
     foreach ($Argument in ($Overrides + $CodexArgs)) {
         Write-Output "brinecdx-argv: $Argument"
     }
-
     exit 0
 }
 
-if ($env:BRINECDX_CODEX_BIN) {
-    & $env:BRINECDX_CODEX_BIN @Overrides @CodexArgs
-} else {
-    & cargo run `
-        --manifest-path (Join-Path $RepoRoot 'codex-rs\Cargo.toml') `
-        -p codex-cli `
-        --bin codex `
-        -- `
-        @Overrides `
-        @CodexArgs
+$SavedBrineUrl = [Environment]::GetEnvironmentVariable('BRINE_EXEC_SERVER_URL')
+$SavedBrineToken = [Environment]::GetEnvironmentVariable('BRINE_EXEC_SERVER_TOKEN')
+$SavedCodexUrl = [Environment]::GetEnvironmentVariable('CODEX_EXEC_SERVER_URL')
+$ExitCode = 0
+
+try {
+    if ($ExecutionMode -eq 'local') {
+        # Force the downstream environment provider onto Codex's host-local
+        # environment even if these variables are persisted in the parent shell.
+        Remove-Item -LiteralPath 'Env:BRINE_EXEC_SERVER_URL' -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath 'Env:BRINE_EXEC_SERVER_TOKEN' -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath 'Env:CODEX_EXEC_SERVER_URL' -ErrorAction SilentlyContinue
+    }
+
+    if ($env:BRINECDX_CODEX_BIN) {
+        & $env:BRINECDX_CODEX_BIN @Overrides @CodexArgs
+    } else {
+        & cargo run `
+            --manifest-path (Join-Path $RepoRoot 'codex-rs\Cargo.toml') `
+            -p codex-cli `
+            --bin codex `
+            -- `
+            @Overrides `
+            @CodexArgs
+    }
+
+    if ($null -ne $LASTEXITCODE) { $ExitCode = $LASTEXITCODE }
+} finally {
+    Restore-EnvValue 'BRINE_EXEC_SERVER_URL' $SavedBrineUrl
+    Restore-EnvValue 'BRINE_EXEC_SERVER_TOKEN' $SavedBrineToken
+    Restore-EnvValue 'CODEX_EXEC_SERVER_URL' $SavedCodexUrl
 }
 
-if ($LASTEXITCODE) {
-    exit $LASTEXITCODE
-}
+if ($ExitCode) { exit $ExitCode }
