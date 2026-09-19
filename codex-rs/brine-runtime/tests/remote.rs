@@ -62,8 +62,8 @@ fn remote_authority_survives_the_codex_session_boundary() {
     let second = third_client
         .attach(AttachRequest {
             session_id: SessionId::from("codex-session-2"),
-            workspace_key: "repo:brinecdx".to_owned(),
-            workspace_aliases: Vec::new(),
+                workspace_key: "repo:brinecdx".to_owned(),
+                workspace_aliases: Vec::new(),
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
             work_key: String::new(),
             objective: "implement R1".to_owned(),
