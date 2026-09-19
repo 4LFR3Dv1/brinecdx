@@ -14,6 +14,7 @@ use crate::AttachRequest;
 use crate::AttachmentSnapshot;
 use crate::ReconcileRequest;
 use crate::RemoteDelta;
+use crate::RUNTIME_PROTOCOL_VERSION;
 use crate::RuntimeState;
 use crate::SessionAttachment;
 use crate::SessionId;
@@ -223,6 +224,7 @@ impl PersistedRuntimeState {
         self.attachments
             .insert(request.session_id.to_string(), attachment.clone());
         Ok(AttachmentSnapshot {
+            protocol_version: RUNTIME_PROTOCOL_VERSION,
             state: self.snapshot(&workspace_id, &work_id, request.since_revision)?,
             attachment,
         })
@@ -260,6 +262,7 @@ impl PersistedRuntimeState {
         attachment.attached_revision = self.revision;
         let attachment = attachment.clone();
         Ok(AttachmentSnapshot {
+            protocol_version: RUNTIME_PROTOCOL_VERSION,
             state: self.snapshot(
                 &request.workspace_id,
                 &request.work_id,
