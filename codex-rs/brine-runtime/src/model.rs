@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::Deserialize;
@@ -75,6 +76,34 @@ pub struct RemoteDelta {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceMaterialObservation {
+    pub head: Option<String>,
+    pub index_state: String,
+    pub working_tree: String,
+    pub changed_paths: Vec<String>,
+    pub file_digests: BTreeMap<String, String>,
+    pub material_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceMaterialState {
+    pub workspace_id: WorkspaceId,
+    pub material_revision: u64,
+    pub runtime_revision: u64,
+    pub observation: WorkspaceMaterialObservation,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceRevisionRecord {
+    pub workspace_id: WorkspaceId,
+    pub material_revision: u64,
+    pub runtime_revision: u64,
+    pub material_digest: String,
+    pub head: Option<String>,
+    pub changed_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionAttachment {
     pub session_id: SessionId,
     pub workspace_id: WorkspaceId,
@@ -87,6 +116,8 @@ pub struct RuntimeState {
     pub revision: u64,
     pub workspace: WorkspaceRecord,
     pub work: WorkRecord,
+    #[serde(default)]
+    pub workspace_material: Option<WorkspaceMaterialState>,
     pub pending_deltas: Vec<RemoteDelta>,
 }
 
@@ -98,6 +129,8 @@ pub struct AttachRequest {
     pub work_key: String,
     pub objective: String,
     pub since_revision: Option<u64>,
+    #[serde(default)]
+    pub material: Option<WorkspaceMaterialObservation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -106,6 +139,8 @@ pub struct ReconcileRequest {
     pub workspace_id: WorkspaceId,
     pub work_id: WorkId,
     pub since_revision: Option<u64>,
+    #[serde(default)]
+    pub material: Option<WorkspaceMaterialObservation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
