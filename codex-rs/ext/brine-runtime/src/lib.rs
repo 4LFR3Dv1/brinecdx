@@ -39,6 +39,7 @@ use codex_extension_api::TurnStartInput;
 pub use workspace::WorkspaceIdentity;
 pub use workspace::identify_local_workspace;
 pub use workspace::observe_local_workspace;
+use workspace::observe_local_workspace_with_previous;
 
 /// Local physical reality owned by the Codex host.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -146,7 +147,7 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 return;
             };
             let session_id = SessionId::from(input.session_store.level_id());
-            let material = observe_material_or_warn(&config.local_workspace);
+            let material = observe_material_or_warn(&config.local_workspace, None);
             let result = self.authority.attach(AttachRequest {
                 session_id,
                 workspace_key: config.workspace_key,
@@ -172,7 +173,12 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             let Some(current) = input.thread_store.get::<AttachedRuntime>() else {
                 return;
             };
-            let material = observe_material_or_warn(&current.local_workspace);
+            let previous = current
+                .state
+                .workspace_material
+                .as_ref()
+                .map(|state| &state.observation);
+            let material = observe_material_or_warn(&current.local_workspace, previous);
             let result = self.authority.reconcile(ReconcileRequest {
                 session_id: current.remote.session_id.clone(),
                 workspace_id: current.remote.workspace_id.clone(),
@@ -249,7 +255,12 @@ impl<C: Sync> BrineRuntimeExtension<C> {
         let Some(current) = thread_store.get::<AttachedRuntime>() else {
             return;
         };
-        let Some(material) = observe_material_or_warn(&current.local_workspace) else {
+        let previous = current
+            .state
+            .workspace_material
+            .as_ref()
+            .map(|state| &state.observation);
+        let Some(material) = observe_material_or_warn(&current.local_workspace, previous) else {
             return;
         };
         if current
@@ -299,8 +310,9 @@ impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
 
 fn observe_material_or_warn(
     workspace: &LocalWorkspace,
+    previous: Option<&codex_brine_runtime::WorkspaceMaterialObservation>,
 ) -> Option<codex_brine_runtime::WorkspaceMaterialObservation> {
-    match observe_local_workspace(workspace) {
+    match observe_local_workspace_with_previous(workspace, previous) {
         Ok(material) => material,
         Err(error) => {
             tracing::warn!(
