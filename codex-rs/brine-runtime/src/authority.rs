@@ -135,12 +135,44 @@ impl PersistedRuntimeState {
         } else {
             request.work_key.clone()
         };
-        let workspace_id = self
+        let exact_workspace_id = self
             .workspaces
             .values()
             .find(|workspace| workspace.key == request.workspace_key)
-            .map(|workspace| workspace.id.clone())
-            .unwrap_or_else(|| {
+            .map(|workspace| workspace.id.clone());
+        let aliased_workspace_id = exact_workspace_id.is_none().then(|| {
+            self.workspaces
+                .values()
+                .find(|workspace| {
+                    request
+                        .workspace_aliases
+                        .iter()
+                        .any(|alias| alias == &workspace.key)
+                })
+                .map(|workspace| workspace.id.clone())
+        }).flatten();
+
+        let workspace_id = match exact_workspace_id.or(aliased_workspace_id) {
+            Some(id) => {
+                let needs_identity_update = self
+                    .workspaces
+                    .get(id.as_str())
+                    .is_some_and(|workspace| {
+                        workspace.key != request.workspace_key
+                            || workspace.repository_identity != request.repository_identity
+                    });
+                if needs_identity_update {
+                    self.revision += 1;
+                    let workspace = self
+                        .workspaces
+                        .get_mut(id.as_str())
+                        .expect("resolved workspace must remain present");
+                    workspace.key = request.workspace_key.clone();
+                    workspace.repository_identity = request.repository_identity.clone();
+                }
+                id
+            }
+            None => {
                 let id = WorkspaceId::new();
                 self.revision += 1;
                 self.workspaces.insert(
@@ -153,7 +185,8 @@ impl PersistedRuntimeState {
                     },
                 );
                 id
-            });
+            }
+        };
 
         self.apply_workspace_material(&workspace_id, request.material.as_ref());
 
