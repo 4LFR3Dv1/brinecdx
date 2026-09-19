@@ -168,3 +168,73 @@ fn trim_ascii(bytes: &[u8]) -> &[u8] {
         .map_or(start, |index| index + 1);
     &bytes[start..end]
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::process::Command;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+
+    use super::observe_local_workspace;
+    use crate::LocalWorkspace;
+
+    #[test]
+    fn observation_is_stable_until_material_changes() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "brine-workspace-observer-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create temp repository");
+        run_git(&root, &["init"]);
+        run_git(&root, &["config", "user.email", "brine@example.invalid"]);
+        run_git(&root, &["config", "user.name", "Brine Test"]);
+
+        let tracked = root.join("tracked.txt");
+        fs::write(&tracked, "one\n").expect("write tracked file");
+        run_git(&root, &["add", "tracked.txt"]);
+        run_git(&root, &["commit", "-m", "initial"]);
+
+        let workspace = LocalWorkspace {
+            root: root.clone(),
+            repository_identity: "test-repository".to_owned(),
+        };
+        let first = observe_local_workspace(&workspace)
+            .expect("observe first snapshot")
+            .expect("git workspace");
+        let same = observe_local_workspace(&workspace)
+            .expect("observe unchanged snapshot")
+            .expect("git workspace");
+        assert_eq!(same.material_digest, first.material_digest);
+        assert_eq!(same.changed_paths, first.changed_paths);
+
+        fs::write(&tracked, "two\n").expect("change tracked file");
+        let changed = observe_local_workspace(&workspace)
+            .expect("observe changed snapshot")
+            .expect("git workspace");
+        assert_ne!(changed.material_digest, first.material_digest);
+        assert_eq!(changed.changed_paths, vec!["tracked.txt".to_owned()]);
+        assert!(changed.file_digests.contains_key("tracked.txt"));
+
+        fs::remove_dir_all(root).expect("remove temp repository");
+    }
+
+    fn run_git(root: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("launch git");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
