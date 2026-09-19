@@ -1,8 +1,11 @@
+use std::collections::BTreeMap;
+
 use codex_brine_runtime::AttachRequest;
 use codex_brine_runtime::FileRuntimeAuthority;
 use codex_brine_runtime::ReconcileRequest;
 use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::SessionId;
+use codex_brine_runtime::WorkspaceMaterialObservation;
 use tempfile::tempdir;
 
 #[test]
@@ -76,4 +79,125 @@ fn authority_survives_session_and_replays_remote_delta() {
         })
         .expect("reconcile second session");
     assert!(reconciled.state.pending_deltas.is_empty());
+}
+
+#[test]
+fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("runtime.json");
+    let authority = FileRuntimeAuthority::open(&path).expect("open authority");
+
+    let first = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("material-session-1"),
+            workspace_key: "repo:material".to_owned(),
+            repository_identity: "git:material".to_owned(),
+            work_key: String::new(),
+            objective: "observe material".to_owned(),
+            since_revision: None,
+            material: Some(material_observation("head-a", "digest-a", "src/lib.rs")),
+        })
+        .expect("attach first material snapshot");
+    let first_material = first
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("material state should exist");
+    assert_eq!(first_material.material_revision, 1);
+    assert_eq!(first.state.revision, 3);
+
+    let same = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("material-session-2"),
+            workspace_key: "repo:material".to_owned(),
+            repository_identity: "git:material".to_owned(),
+            work_key: String::new(),
+            objective: "observe material".to_owned(),
+            since_revision: Some(first.state.revision),
+            material: Some(material_observation("head-a", "digest-a", "src/lib.rs")),
+        })
+        .expect("attach identical material snapshot");
+    assert_eq!(same.state.revision, first.state.revision);
+    assert_eq!(
+        same.state
+            .workspace_material
+            .as_ref()
+            .expect("material state should exist")
+            .material_revision,
+        1
+    );
+
+    let changed = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("material-session-3"),
+            workspace_key: "repo:material".to_owned(),
+            repository_identity: "git:material".to_owned(),
+            work_key: String::new(),
+            objective: "observe material".to_owned(),
+            since_revision: Some(same.state.revision),
+            material: Some(material_observation("head-a", "digest-b", "src/lib.rs")),
+        })
+        .expect("attach changed material snapshot");
+    assert_eq!(changed.state.revision, first.state.revision + 1);
+    let changed_material = changed
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("changed material state should exist");
+    assert_eq!(changed_material.material_revision, 2);
+    assert_eq!(changed_material.runtime_revision, changed.state.revision);
+
+    drop(authority);
+
+    let reopened = FileRuntimeAuthority::open(&path).expect("reopen authority");
+    let stable = reopened
+        .attach(AttachRequest {
+            session_id: SessionId::from("material-session-4"),
+            workspace_key: "repo:material".to_owned(),
+            repository_identity: "git:material".to_owned(),
+            work_key: String::new(),
+            objective: "observe material".to_owned(),
+            since_revision: Some(changed.state.revision),
+            material: Some(material_observation("head-a", "digest-b", "src/lib.rs")),
+        })
+        .expect("reattach same material after restart");
+    assert_eq!(stable.state.revision, changed.state.revision);
+    assert_eq!(
+        stable
+            .state
+            .workspace_material
+            .as_ref()
+            .expect("material state should survive restart")
+            .material_revision,
+        2
+    );
+
+    let persisted: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&path).expect("read persisted runtime"),
+    )
+    .expect("parse persisted runtime");
+    assert_eq!(
+        persisted["workspace_revisions"]
+            .as_array()
+            .expect("workspace revision history")
+            .len(),
+        2
+    );
+}
+
+fn material_observation(
+    head: &str,
+    material_digest: &str,
+    changed_path: &str,
+) -> WorkspaceMaterialObservation {
+    let mut file_digests = BTreeMap::new();
+    file_digests.insert(changed_path.to_owned(), format!("file:{material_digest}"));
+    WorkspaceMaterialObservation {
+        head: Some(head.to_owned()),
+        index_state: format!("index:{material_digest}"),
+        working_tree: format!("worktree:{material_digest}"),
+        changed_paths: vec![changed_path.to_owned()],
+        file_digests,
+        material_digest: material_digest.to_owned(),
+    }
 }
