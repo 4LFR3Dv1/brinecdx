@@ -20,7 +20,10 @@ use crate::SessionId;
 use crate::WorkId;
 use crate::WorkRecord;
 use crate::WorkspaceId;
+use crate::WorkspaceMaterialObservation;
+use crate::WorkspaceMaterialState;
 use crate::WorkspaceRecord;
+use crate::WorkspaceRevisionRecord;
 
 const ROOT_WORK_KEY: &str = "root";
 
@@ -84,6 +87,10 @@ struct PersistedRuntimeState {
     works: BTreeMap<String, WorkRecord>,
     attachments: BTreeMap<String, SessionAttachment>,
     deltas: Vec<RemoteDelta>,
+    #[serde(default)]
+    workspace_material: BTreeMap<String, WorkspaceMaterialState>,
+    #[serde(default)]
+    workspace_revisions: Vec<WorkspaceRevisionRecord>,
 }
 
 impl PersistedRuntimeState {
@@ -114,6 +121,7 @@ impl PersistedRuntimeState {
             revision: self.revision,
             workspace,
             work,
+            workspace_material: self.workspace_material.get(workspace_id.as_str()).cloned(),
             pending_deltas,
         })
     }
@@ -146,6 +154,8 @@ impl PersistedRuntimeState {
                 );
                 id
             });
+
+        self.apply_workspace_material(&workspace_id, request.material.as_ref());
 
         let work_id = self
             .works
@@ -187,6 +197,8 @@ impl PersistedRuntimeState {
         &mut self,
         request: &ReconcileRequest,
     ) -> Result<AttachmentSnapshot, RuntimeAuthorityError> {
+        self.apply_workspace_material(&request.workspace_id, request.material.as_ref());
+
         let Some(attachment) = self.attachments.get_mut(request.session_id.as_str()) else {
             return Err(RuntimeAuthorityError::SessionNotAttached(
                 request.session_id.clone(),
@@ -210,6 +222,47 @@ impl PersistedRuntimeState {
             )?,
             attachment,
         })
+    }
+
+    fn apply_workspace_material(
+        &mut self,
+        workspace_id: &WorkspaceId,
+        observation: Option<&WorkspaceMaterialObservation>,
+    ) {
+        let Some(observation) = observation else {
+            return;
+        };
+        if self
+            .workspace_material
+            .get(workspace_id.as_str())
+            .is_some_and(|state| state.observation.material_digest == observation.material_digest)
+        {
+            return;
+        }
+
+        let material_revision = self
+            .workspace_material
+            .get(workspace_id.as_str())
+            .map(|state| state.material_revision + 1)
+            .unwrap_or(1);
+        self.revision += 1;
+        let runtime_revision = self.revision;
+        let material_state = WorkspaceMaterialState {
+            workspace_id: workspace_id.clone(),
+            material_revision,
+            runtime_revision,
+            observation: observation.clone(),
+        };
+        self.workspace_material
+            .insert(workspace_id.to_string(), material_state);
+        self.workspace_revisions.push(WorkspaceRevisionRecord {
+            workspace_id: workspace_id.clone(),
+            material_revision,
+            runtime_revision,
+            material_digest: observation.material_digest.clone(),
+            head: observation.head.clone(),
+            changed_paths: observation.changed_paths.clone(),
+        });
     }
 }
 
