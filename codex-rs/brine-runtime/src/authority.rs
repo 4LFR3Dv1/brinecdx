@@ -197,21 +197,31 @@ impl PersistedRuntimeState {
         &mut self,
         request: &ReconcileRequest,
     ) -> Result<AttachmentSnapshot, RuntimeAuthorityError> {
-        self.apply_workspace_material(&request.workspace_id, request.material.as_ref());
-
-        let Some(attachment) = self.attachments.get_mut(request.session_id.as_str()) else {
+        let Some(existing_attachment) = self
+            .attachments
+            .get(request.session_id.as_str())
+            .cloned()
+        else {
             return Err(RuntimeAuthorityError::SessionNotAttached(
                 request.session_id.clone(),
                 request.work_id.clone(),
             ));
         };
-        if attachment.workspace_id != request.workspace_id || attachment.work_id != request.work_id
+        if existing_attachment.workspace_id != request.workspace_id
+            || existing_attachment.work_id != request.work_id
         {
             return Err(RuntimeAuthorityError::SessionNotAttached(
                 request.session_id.clone(),
                 request.work_id.clone(),
             ));
         }
+
+        self.apply_workspace_material(&request.workspace_id, request.material.as_ref());
+
+        let attachment = self
+            .attachments
+            .get_mut(request.session_id.as_str())
+            .expect("validated attachment remains present");
         attachment.attached_revision = self.revision;
         let attachment = attachment.clone();
         Ok(AttachmentSnapshot {
