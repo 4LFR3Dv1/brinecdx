@@ -4,6 +4,8 @@ use std::fmt;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub const RUNTIME_PROTOCOL_VERSION: u32 = 2;
+
 macro_rules! id_type {
     ($name:ident) => {
         #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -178,6 +180,7 @@ pub struct ReconcileRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AttachmentSnapshot {
+    pub protocol_version: u32,
     pub attachment: SessionAttachment,
     pub state: RuntimeState,
 }
