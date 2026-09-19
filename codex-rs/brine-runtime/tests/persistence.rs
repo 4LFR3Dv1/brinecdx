@@ -6,6 +6,7 @@ use codex_brine_runtime::ReconcileRequest;
 use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::SessionId;
 use codex_brine_runtime::WorkspaceMaterialObservation;
+use codex_brine_runtime::WorkspaceStructureObservation;
 use tempfile::tempdir;
 
 #[test]
@@ -199,5 +200,6 @@ fn material_observation(
         changed_paths: vec![changed_path.to_owned()],
         file_digests,
         material_digest: material_digest.to_owned(),
+        structure: WorkspaceStructureObservation::default(),
     }
 }
