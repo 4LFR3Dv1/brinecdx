@@ -57,6 +57,7 @@ fn attachment_retains_runtime_revision_and_pending_deltas() {
                 created_revision: 2,
                 last_revision: 4,
             },
+            workspace_material: None,
             pending_deltas: vec![
                 RemoteDelta {
                     revision: 3,
