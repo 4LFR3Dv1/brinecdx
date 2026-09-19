@@ -2184,6 +2184,8 @@ dependencies = [
  "codex-arg0",
  "codex-aws-auth",
  "codex-backend-client",
+ "codex-brine-runtime",
+ "codex-brine-runtime-extension",
  "codex-chatgpt",
  "codex-cloud-config",
  "codex-code-mode",
@@ -2535,6 +2537,26 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+]
+
+[[package]]
+name = "codex-brine-runtime"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "codex-brine-runtime-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-brine-runtime",
+ "codex-extension-api",
+ "tracing",
 ]
 
 [[package]]
