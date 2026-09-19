@@ -75,6 +75,29 @@ pub struct RemoteDelta {
     pub summary: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceStructureObservation {
+    pub digest: String,
+    pub symbols: Vec<StructuralSymbol>,
+    pub unresolved_relations: Vec<UnresolvedStructuralRelation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StructuralSymbol {
+    pub path: String,
+    pub name: String,
+    pub kind: String,
+    pub line: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UnresolvedStructuralRelation {
+    pub path: String,
+    pub kind: String,
+    pub target: String,
+    pub line: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkspaceMaterialObservation {
     pub head: Option<String>,
@@ -83,12 +106,16 @@ pub struct WorkspaceMaterialObservation {
     pub changed_paths: Vec<String>,
     pub file_digests: BTreeMap<String, String>,
     pub material_digest: String,
+    #[serde(default)]
+    pub structure: WorkspaceStructureObservation,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkspaceMaterialState {
     pub workspace_id: WorkspaceId,
     pub material_revision: u64,
+    #[serde(default)]
+    pub structural_revision: u64,
     pub runtime_revision: u64,
     pub observation: WorkspaceMaterialObservation,
 }
@@ -97,8 +124,12 @@ pub struct WorkspaceMaterialState {
 pub struct WorkspaceRevisionRecord {
     pub workspace_id: WorkspaceId,
     pub material_revision: u64,
+    #[serde(default)]
+    pub structural_revision: u64,
     pub runtime_revision: u64,
     pub material_digest: String,
+    #[serde(default)]
+    pub structure_digest: String,
     pub head: Option<String>,
     pub changed_paths: Vec<String>,
 }
