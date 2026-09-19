@@ -244,7 +244,7 @@ impl<C: Sync> ToolLifecycleContributor for BrineRuntimeExtension<C> {
             if !calls.remove(input.call_id) || !outcome_may_have_mutated(input.outcome) {
                 return;
             }
-            self.refresh_workspace_state(input.thread_store, "tool_finish");
+            self.refresh_workspace_state(input.thread_store, "tool_finish", false);
         })
     }
 }
@@ -254,6 +254,7 @@ impl<C: Sync> BrineRuntimeExtension<C> {
         &self,
         thread_store: &codex_extension_api::ExtensionData,
         operation: &str,
+        reconcile_when_unchanged: bool,
     ) {
         let Some(current) = thread_store.get::<AttachedRuntime>() else {
             return;
@@ -266,11 +267,14 @@ impl<C: Sync> BrineRuntimeExtension<C> {
         let Some(material) = observe_material_or_warn(&current.local_workspace, previous) else {
             return;
         };
-        if current
-            .state
-            .workspace_material
-            .as_ref()
-            .is_some_and(|state| state.observation.material_digest == material.material_digest)
+        if !reconcile_when_unchanged
+            && current
+                .state
+                .workspace_material
+                .as_ref()
+                .is_some_and(|state| {
+                    state.observation.material_digest == material.material_digest
+                })
         {
             return;
         }
@@ -306,7 +310,7 @@ fn outcome_may_have_mutated(outcome: ToolCallOutcome) -> bool {
 impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            self.refresh_workspace_state(input.thread_store, "turn_start");
+            self.refresh_workspace_state(input.thread_store, "turn_start", true);
         })
     }
 }
