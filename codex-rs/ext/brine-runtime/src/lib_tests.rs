@@ -11,10 +11,12 @@ use codex_brine_runtime::WorkRecord;
 use codex_brine_runtime::WorkspaceId;
 use codex_brine_runtime::WorkspaceRecord;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ToolCallOutcome;
 
 use super::LocalWorkspace;
 use super::attached_runtime;
 use super::install;
+use super::outcome_may_have_mutated;
 
 #[test]
 fn install_registers_only_lifecycle_attachment() {
@@ -26,6 +28,7 @@ fn install_registers_only_lifecycle_attachment() {
     );
     let registry = builder.build();
     assert_eq!(registry.thread_lifecycle_contributors().len(), 1);
+    assert_eq!(registry.tool_lifecycle_contributors().len(), 1);
     assert!(registry.context_contributors().is_empty());
 }
 
@@ -87,4 +90,22 @@ fn attachment_retains_runtime_revision_and_pending_deltas() {
         "second offline delta"
     );
     assert_eq!(attached.local_workspace, local_workspace);
+}
+
+#[test]
+fn mutation_observation_runs_only_when_execution_could_have_happened() {
+    assert!(outcome_may_have_mutated(ToolCallOutcome::Completed {
+        success: true,
+    }));
+    assert!(outcome_may_have_mutated(ToolCallOutcome::Completed {
+        success: false,
+    }));
+    assert!(outcome_may_have_mutated(ToolCallOutcome::Failed {
+        handler_executed: true,
+    }));
+    assert!(outcome_may_have_mutated(ToolCallOutcome::Aborted));
+    assert!(!outcome_may_have_mutated(ToolCallOutcome::Blocked));
+    assert!(!outcome_may_have_mutated(ToolCallOutcome::Failed {
+        handler_executed: false,
+    }));
 }
