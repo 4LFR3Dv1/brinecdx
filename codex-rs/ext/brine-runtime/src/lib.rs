@@ -4,6 +4,8 @@
 //! The local workspace root stays in the host thread store and is never sent to
 //! the authority or exposed as model-visible context.
 
+mod workspace;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,6 +23,8 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
+
+pub use workspace::observe_local_workspace;
 
 /// Local physical reality owned by the Codex host.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,6 +108,7 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 return;
             };
             let session_id = SessionId::from(input.session_store.level_id());
+            let material = observe_material_or_warn(&config.local_workspace);
             let result = self.authority.attach(AttachRequest {
                 session_id,
                 workspace_key: config.workspace_key,
@@ -111,6 +116,7 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 work_key: config.work_key,
                 objective: config.objective,
                 since_revision: None,
+                material,
             });
             match result {
                 Ok(snapshot) => {
@@ -128,11 +134,13 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             let Some(current) = input.thread_store.get::<AttachedRuntime>() else {
                 return;
             };
+            let material = observe_material_or_warn(&current.local_workspace);
             let result = self.authority.reconcile(ReconcileRequest {
                 session_id: current.remote.session_id.clone(),
                 workspace_id: current.remote.workspace_id.clone(),
                 work_id: current.remote.work_id.clone(),
                 since_revision: Some(current.remote.attached_revision),
+                material,
             });
             match result {
                 Ok(snapshot) => {
@@ -154,6 +162,22 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 log_attachment_error("detach", error);
             }
         })
+    }
+}
+
+fn observe_material_or_warn(
+    workspace: &LocalWorkspace,
+) -> Option<codex_brine_runtime::WorkspaceMaterialObservation> {
+    match observe_local_workspace(workspace) {
+        Ok(material) => material,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                root = %workspace.root.display(),
+                "Brine workspace material observation failed"
+            );
+            None
+        }
     }
 }
 
