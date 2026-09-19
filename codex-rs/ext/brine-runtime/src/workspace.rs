@@ -9,6 +9,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use crate::LocalWorkspace;
+use crate::structure::observe_structure;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceIdentity {
@@ -119,6 +120,7 @@ pub fn observe_local_workspace(
         material_basis.push(0);
     }
     let material_digest = hash_bytes(&material_basis)?;
+    let structure = observe_structure(root)?;
 
     Ok(Some(WorkspaceMaterialObservation {
         head,
@@ -127,6 +129,7 @@ pub fn observe_local_workspace(
         changed_paths,
         file_digests,
         material_digest,
+        structure,
     }))
 }
 
