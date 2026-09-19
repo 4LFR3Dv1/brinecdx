@@ -31,6 +31,7 @@ fn remote_authority_survives_the_codex_session_boundary() {
                 work_key: String::new(),
                 objective: "implement R1".to_owned(),
                 since_revision: None,
+                material: None,
             })
             .expect("attach first session");
         let first_revision = first.state.revision;
