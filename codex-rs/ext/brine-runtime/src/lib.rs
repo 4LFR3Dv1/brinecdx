@@ -36,7 +36,7 @@ pub struct SessionAttachmentConfig {
     pub workspace_key: String,
     /// Repository identity observed by the local host.
     pub repository_identity: String,
-    /// Stable logical work key. It must outlive a Codex process.
+    /// Stable logical work key. Empty selects the workspace's persistent root Work.
     pub work_key: String,
     /// Objective associated with a newly-created work record.
     pub objective: String,
@@ -98,16 +98,11 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 return;
             };
             let session_id = SessionId::from(input.session_store.level_id());
-            let work_key = if config.work_key.is_empty() {
-                input.thread_store.level_id().to_owned()
-            } else {
-                config.work_key.clone()
-            };
             let result = self.authority.attach(AttachRequest {
                 session_id,
                 workspace_key: config.workspace_key,
                 repository_identity: config.repository_identity.clone(),
-                work_key,
+                work_key: config.work_key,
                 objective: config.objective,
                 since_revision: None,
             });

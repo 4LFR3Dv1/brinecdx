@@ -28,7 +28,7 @@ fn remote_authority_survives_the_codex_session_boundary() {
                 session_id: SessionId::from("codex-session-1"),
                 workspace_key: "repo:brinecdx".to_owned(),
                 repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
-                work_key: "work:r1".to_owned(),
+                work_key: String::new(),
                 objective: "implement R1".to_owned(),
                 since_revision: None,
             })
@@ -62,7 +62,7 @@ fn remote_authority_survives_the_codex_session_boundary() {
             session_id: SessionId::from("codex-session-2"),
             workspace_key: "repo:brinecdx".to_owned(),
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
-            work_key: "work:r1".to_owned(),
+            work_key: String::new(),
             objective: "implement R1".to_owned(),
             since_revision: Some(first_revision),
         })
@@ -71,7 +71,9 @@ fn remote_authority_survives_the_codex_session_boundary() {
         second.attachment.workspace_id,
         first.attachment.workspace_id
     );
+    assert_ne!(second.attachment.session_id, first.attachment.session_id);
     assert_eq!(second.attachment.work_id, first.attachment.work_id);
+    assert_eq!(second.state.work.key, "root");
     assert_eq!(second.state.pending_deltas.len(), 1);
     third_client
         .reconcile(ReconcileRequest {

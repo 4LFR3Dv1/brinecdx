@@ -22,6 +22,8 @@ use crate::WorkRecord;
 use crate::WorkspaceId;
 use crate::WorkspaceRecord;
 
+const ROOT_WORK_KEY: &str = "root";
+
 /// Errors returned by a Brine runtime authority.
 #[derive(Debug, Error)]
 pub enum RuntimeAuthorityError {
@@ -46,6 +48,8 @@ pub enum RuntimeAuthorityError {
 /// handles: physical reality is observed by the attaching host.
 pub trait RuntimeAuthority: Send + Sync {
     /// Attach a temporary session to durable workspace and work identities.
+    ///
+    /// An empty work key selects the workspace's stable root Work.
     fn attach(&self, request: AttachRequest) -> Result<AttachmentSnapshot, RuntimeAuthorityError>;
 
     /// Reconcile an existing attachment and return remote deltas since a revision.
@@ -118,6 +122,11 @@ impl PersistedRuntimeState {
         &mut self,
         request: &AttachRequest,
     ) -> Result<AttachmentSnapshot, RuntimeAuthorityError> {
+        let work_key = if request.work_key.is_empty() {
+            ROOT_WORK_KEY.to_owned()
+        } else {
+            request.work_key.clone()
+        };
         let workspace_id = self
             .workspaces
             .values()
@@ -141,7 +150,7 @@ impl PersistedRuntimeState {
         let work_id = self
             .works
             .values()
-            .find(|work| work.workspace_id == workspace_id && work.key == request.work_key)
+            .find(|work| work.workspace_id == workspace_id && work.key == work_key)
             .map(|work| work.id.clone())
             .unwrap_or_else(|| {
                 let id = WorkId::new();
@@ -151,7 +160,7 @@ impl PersistedRuntimeState {
                     WorkRecord {
                         id: id.clone(),
                         workspace_id: workspace_id.clone(),
-                        key: request.work_key.clone(),
+                        key: work_key.clone(),
                         objective: request.objective.clone(),
                         created_revision: self.revision,
                         last_revision: self.revision,
