@@ -27,16 +27,13 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
-use codex_extension_api::ToolFinishInput;
-use codex_extension_api::ToolLifecycleContributor;
-use codex_extension_api::ToolLifecycleFuture;
-use codex_extension_api::TurnLifecycleContributor;
-use codex_extension_api::TurnStartInput;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
+use codex_extension_api::TurnLifecycleContributor;
+use codex_extension_api::TurnStartInput;
 
 pub use workspace::WorkspaceIdentity;
 pub use workspace::identify_local_workspace;
@@ -116,6 +113,7 @@ pub fn install<C: Sync + 'static>(
 ) {
     let extension = Arc::new(BrineRuntimeExtension::new(authority, config));
     builder.thread_lifecycle_contributor(extension.clone());
+    builder.turn_lifecycle_contributor(extension.clone());
     builder.tool_lifecycle_contributor(extension);
 }
 
@@ -204,7 +202,7 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
     }
 }
 
-impl<C> ToolLifecycleContributor for BrineRuntimeExtension<C> {
+impl<C: Sync> ToolLifecycleContributor for BrineRuntimeExtension<C> {
     fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(async move {
             if matches!(
@@ -236,13 +234,17 @@ impl<C> ToolLifecycleContributor for BrineRuntimeExtension<C> {
             if !calls.remove(input.call_id) || !outcome_may_have_mutated(input.outcome) {
                 return;
             }
-            self.reconcile_material_after_tool(input.thread_store);
+            self.refresh_workspace_state(input.thread_store, "tool_finish");
         })
     }
 }
 
-impl<C> BrineRuntimeExtension<C> {
-    fn reconcile_material_after_tool(&self, thread_store: &codex_extension_api::ExtensionData) {
+impl<C: Sync> BrineRuntimeExtension<C> {
+    fn refresh_workspace_state(
+        &self,
+        thread_store: &codex_extension_api::ExtensionData,
+        operation: &str,
+    ) {
         let Some(current) = thread_store.get::<AttachedRuntime>() else {
             return;
         };
@@ -262,16 +264,16 @@ impl<C> BrineRuntimeExtension<C> {
             session_id: current.remote.session_id.clone(),
             workspace_id: current.remote.workspace_id.clone(),
             work_id: current.remote.work_id.clone(),
-            since_revision: Some(current.remote.attached_revision),
+            since_revision: Some(current.state.revision),
             material: Some(material),
         });
         match result {
             Ok(snapshot) => {
                 let attached = attached_runtime(snapshot, current.local_workspace.clone());
-                log_attachment_success("tool_reconcile", &attached);
+                log_attachment_success(operation, &attached);
                 thread_store.insert(attached);
             }
-            Err(error) => log_attachment_error("tool_reconcile", error),
+            Err(error) => log_attachment_error(operation, error),
         }
     }
 }
@@ -291,50 +293,6 @@ impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
         Box::pin(async move {
             self.refresh_workspace_state(input.thread_store, "turn_start");
         })
-    }
-}
-
-impl<C: Sync> ToolLifecycleContributor for BrineRuntimeExtension<C> {
-    fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
-        Box::pin(async move {
-            if matches!(
-                input.outcome,
-                codex_extension_api::ToolCallOutcome::Completed { .. }
-                    | codex_extension_api::ToolCallOutcome::Failed {
-                        handler_executed: true
-                    }
-            ) {
-                self.refresh_workspace_state(input.thread_store, "tool_finish");
-            }
-        })
-    }
-}
-
-impl<C: Sync> BrineRuntimeExtension<C> {
-    fn refresh_workspace_state(
-        &self,
-        thread_store: &codex_extension_api::ExtensionData,
-        operation: &str,
-    ) {
-        let Some(current) = thread_store.get::<AttachedRuntime>() else {
-            return;
-        };
-        let material = observe_material_or_warn(&current.local_workspace);
-        let result = self.authority.reconcile(ReconcileRequest {
-            session_id: current.remote.session_id.clone(),
-            workspace_id: current.remote.workspace_id.clone(),
-            work_id: current.remote.work_id.clone(),
-            since_revision: Some(current.state.revision),
-            material,
-        });
-        match result {
-            Ok(snapshot) => {
-                let attached = attached_runtime(snapshot, current.local_workspace.clone());
-                log_attachment_success(operation, &attached);
-                thread_store.insert(attached);
-            }
-            Err(error) => log_attachment_error(operation, error),
-        }
     }
 }
 
