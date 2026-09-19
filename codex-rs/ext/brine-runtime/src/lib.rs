@@ -55,6 +55,8 @@ pub struct LocalWorkspace {
 pub struct SessionAttachmentConfig {
     /// Stable logical workspace key understood by the remote authority.
     pub workspace_key: String,
+    /// Legacy workspace keys that may be migrated to workspace_key.
+    pub workspace_aliases: Vec<String>,
     /// Repository identity observed by the local host.
     pub repository_identity: String,
     /// Stable logical work key. Empty selects the workspace's persistent root Work.
@@ -151,6 +153,7 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             let result = self.authority.attach(AttachRequest {
                 session_id,
                 workspace_key: config.workspace_key,
+                workspace_aliases: config.workspace_aliases,
                 repository_identity: config.repository_identity.clone(),
                 work_key: config.work_key,
                 objective: config.objective,
