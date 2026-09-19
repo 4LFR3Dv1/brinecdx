@@ -11,6 +11,7 @@ use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_app_server_protocol::WarningNotification;
 use codex_brine_runtime::TcpRuntimeAuthority;
 use codex_brine_runtime_extension::LocalWorkspace;
+use codex_brine_runtime_extension::identify_local_workspace;
 use codex_brine_runtime_extension::SessionAttachmentConfig;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -29,8 +30,6 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_queue_extension::QueuedItemService;
 use codex_rollout::state_db::StateDbHandle;
-use sha2::Digest;
-use sha2::Sha256;
 
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
@@ -80,18 +79,15 @@ pub(crate) fn thread_extensions(
             Arc::new(TcpRuntimeAuthority::new(address)),
             |config: &Config| {
                 let root = config.cwd.as_path().to_path_buf();
-                let workspace_identity = format!(
-                    "local:{:x}",
-                    Sha256::digest(root.to_string_lossy().as_bytes())
-                );
+                let identity = identify_local_workspace(&root);
                 Some(SessionAttachmentConfig {
-                    workspace_key: workspace_identity.clone(),
-                    repository_identity: workspace_identity.clone(),
+                    workspace_key: identity.workspace_key,
+                    repository_identity: identity.repository_identity.clone(),
                     work_key: String::new(),
                     objective: "BrineCDX workspace work".to_owned(),
                     local_workspace: LocalWorkspace {
                         root,
-                        repository_identity: workspace_identity,
+                        repository_identity: identity.repository_identity,
                     },
                 })
             },
