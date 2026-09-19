@@ -28,6 +28,7 @@ fn install_registers_runtime_observers_without_model_context() {
     );
     let registry = builder.build();
     assert_eq!(registry.thread_lifecycle_contributors().len(), 1);
+    assert_eq!(registry.turn_lifecycle_contributors().len(), 1);
     assert_eq!(registry.tool_lifecycle_contributors().len(), 1);
     assert!(registry.context_contributors().is_empty());
 }
