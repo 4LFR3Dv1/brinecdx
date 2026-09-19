@@ -163,6 +163,9 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             });
             match result {
                 Ok(snapshot) => {
+                    if !snapshot_protocol_compatible("attach", &snapshot) {
+                        return;
+                    }
                     let attached = attached_runtime(snapshot, config.local_workspace);
                     log_attachment_success("attach", &attached);
                     input.thread_store.insert(attached);
@@ -192,6 +195,9 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             });
             match result {
                 Ok(snapshot) => {
+                    if !snapshot_protocol_compatible("reconcile", &snapshot) {
+                        return;
+                    }
                     let attached = attached_runtime(snapshot, current.local_workspace.clone());
                     log_attachment_success("reconcile", &attached);
                     input.thread_store.insert(attached);
@@ -289,6 +295,9 @@ impl<C: Sync> BrineRuntimeExtension<C> {
         });
         match result {
             Ok(snapshot) => {
+                if !snapshot_protocol_compatible(operation, &snapshot) {
+                    return;
+                }
                 let attached = attached_runtime(snapshot, current.local_workspace.clone());
                 log_attachment_success(operation, &attached);
                 thread_store.insert(attached);
@@ -333,17 +342,23 @@ fn observe_material_or_warn(
     }
 }
 
+fn snapshot_protocol_compatible(operation: &str, snapshot: &AttachmentSnapshot) -> bool {
+    if snapshot.protocol_version == RUNTIME_PROTOCOL_VERSION {
+        return true;
+    }
+    tracing::warn!(
+        operation,
+        expected = RUNTIME_PROTOCOL_VERSION,
+        actual = snapshot.protocol_version,
+        "Brine runtime protocol version mismatch; attachment rejected"
+    );
+    false
+}
+
 fn attached_runtime(
     snapshot: AttachmentSnapshot,
     local_workspace: LocalWorkspace,
 ) -> AttachedRuntime {
-    if snapshot.protocol_version != RUNTIME_PROTOCOL_VERSION {
-        tracing::warn!(
-            expected = RUNTIME_PROTOCOL_VERSION,
-            actual = snapshot.protocol_version,
-            "Brine runtime protocol version mismatch"
-        );
-    }
     AttachedRuntime {
         remote: snapshot.attachment,
         state: snapshot.state,
