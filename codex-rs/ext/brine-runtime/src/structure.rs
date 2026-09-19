@@ -361,10 +361,10 @@ fn normalize_relative(root: &Path, path: PathBuf) -> String {
             }
             output
         });
-    normalized
-        .strip_prefix(root)
-        .map(slash_path)
-        .unwrap_or_else(|_| slash_path(normalized))
+    match normalized.strip_prefix(root) {
+        Ok(relative) => slash_path(relative),
+        Err(_) => slash_path(&normalized),
+    }
 }
 
 fn slash_path(path: impl AsRef<Path>) -> String {
