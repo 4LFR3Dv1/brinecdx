@@ -5,6 +5,7 @@ on:
     paths:
       - "codex-rs/exec-server/**"
       - "codex-rs/core/**"
+      - "scripts/brinecdx*"
       - ".brinecdx/**"
       - ".github/workflows/brinecdx-ci.yml"
 
@@ -27,3 +28,20 @@ jobs:
         run: cargo test -p codex-exec-server environment_provider --lib
       - name: Brine direct argv tests
         run: cargo test -p codex-core brine_direct_argv_tests --lib
+
+  launcher:
+    name: launcher (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Launcher tests
+        if: runner.os != 'Windows'
+        run: bash scripts/brinecdx_test.sh
+      - name: Launcher tests (PowerShell)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: scripts/brinecdx_test.ps1

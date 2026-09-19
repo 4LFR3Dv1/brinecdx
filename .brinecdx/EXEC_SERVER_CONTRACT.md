@@ -13,6 +13,14 @@ Codex owns:
 - model/provider loop and context management;
 - human-readable projection of tool activity.
 
+## Agent runtime
+
+The first witness runs the Codex CLI built from this fork authenticated with
+ChatGPT. `scripts/brinecdx.sh` (and its Windows counterparts) owns provider and
+model selection, so a machine-wide default such as DeepSeek cannot silently
+change which runtime produces the witnessed action. The launcher passes those
+settings as `-c` overrides and never rewrites the shared `~/.codex/config.toml`.
+
 Brine owns, for capabilities crossing this boundary:
 
 - authorization to perform the physical effect;
@@ -83,7 +91,7 @@ Filesystem mutation must eventually cross the same authority boundary. The Codex
 The first accepted end-to-end witness is intentionally read-only:
 
 ```text
-DeepSeek Flash / Codex loop
+Codex (ChatGPT auth) loop
         -> exec_command
         -> remote Codex exec-server protocol
         -> Brine ToolEffect
