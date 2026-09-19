@@ -1,13 +1,50 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
-use std::process::Stdio;
 
 use codex_brine_runtime::WorkspaceMaterialObservation;
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::LocalWorkspace;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkspaceIdentity {
+    pub workspace_key: String,
+    pub repository_identity: String,
+}
+
+/// Resolve stable local workspace identity without sending host paths or remote URLs to the runtime.
+///
+/// Worktrees that share one Git common dir resolve to the same workspace key. When an origin exists,
+/// repository identity is a digest of that URL so embedded credentials are never persisted in clear.
+pub fn identify_local_workspace(root: &Path) -> WorkspaceIdentity {
+    let fallback_root = canonical_or_original(root);
+    let common_dir = git_output_optional(root, &["rev-parse", "--git-common-dir"])
+        .and_then(|bytes| path_from_git_output(root, &bytes))
+        .map(|path| canonical_or_original(&path))
+        .unwrap_or_else(|| fallback_root.clone());
+
+    let workspace_key = format!(
+        "local-git:{}",
+        sha256_hex(common_dir.to_string_lossy().as_bytes())
+    );
+
+    let repository_identity = git_output_optional(root, &["config", "--get", "remote.origin.url"])
+        .and_then(|bytes| {
+            let value = String::from_utf8_lossy(trim_ascii(&bytes)).into_owned();
+            (!value.is_empty()).then_some(value)
+        })
+        .map(|origin| format!("origin-sha256:{}", sha256_hex(origin.as_bytes())))
+        .unwrap_or_else(|| workspace_key.clone());
+
+    WorkspaceIdentity {
+        workspace_key,
+        repository_identity,
+    }
+}
 
 /// Observe the current local Git material without sending filesystem handles to the runtime.
 ///
@@ -45,7 +82,7 @@ pub fn observe_local_workspace(
     for path in &changed_paths {
         let absolute = root.join(path);
         let digest = if absolute.is_file() {
-            hash_bytes(root, &fs::read(&absolute).map_err(|error| {
+            hash_bytes(&fs::read(&absolute).map_err(|error| {
                 format!("failed reading changed path {}: {error}", absolute.display())
             })?)?
         } else {
@@ -54,7 +91,7 @@ pub fn observe_local_workspace(
         file_digests.insert(path.clone(), digest);
     }
 
-    let index_state = hash_bytes(root, &index_raw)?;
+    let index_state = hash_bytes(&index_raw)?;
     let mut working_basis = working_raw;
     for (path, digest) in &file_digests {
         working_basis.extend_from_slice(path.as_bytes());
@@ -62,7 +99,7 @@ pub fn observe_local_workspace(
         working_basis.extend_from_slice(digest.as_bytes());
         working_basis.push(0);
     }
-    let working_tree = hash_bytes(root, &working_basis)?;
+    let working_tree = hash_bytes(&working_basis)?;
 
     let mut material_basis = Vec::new();
     if let Some(head) = &head {
@@ -81,7 +118,7 @@ pub fn observe_local_workspace(
         }
         material_basis.push(0);
     }
-    let material_digest = hash_bytes(root, &material_basis)?;
+    let material_digest = hash_bytes(&material_basis)?;
 
     Ok(Some(WorkspaceMaterialObservation {
         head,
@@ -121,34 +158,25 @@ fn git_output_optional(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     output.status.success().then_some(output.stdout)
 }
 
-fn hash_bytes(root: &Path, bytes: &[u8]) -> Result<String, String> {
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["hash-object", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to launch git hash-object: {error}"))?;
+fn hash_bytes(bytes: &[u8]) -> Result<String, String> {
+    Ok(sha256_hex(bytes))
+}
 
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| "git hash-object stdin unavailable".to_owned())?
-        .write_all(bytes)
-        .map_err(|error| format!("failed writing git hash-object stdin: {error}"))?;
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
 
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("failed waiting for git hash-object: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git hash-object failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+fn canonical_or_original(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn path_from_git_output(root: &Path, bytes: &[u8]) -> Option<PathBuf> {
+    let raw = trim_ascii(bytes);
+    if raw.is_empty() {
+        return None;
     }
-    Ok(String::from_utf8_lossy(trim_ascii(&output.stdout)).into_owned())
+    let path = PathBuf::from(String::from_utf8_lossy(raw).into_owned());
+    Some(if path.is_absolute() { path } else { root.join(path) })
 }
 
 fn parse_nul_paths(bytes: &[u8]) -> Vec<String> {
