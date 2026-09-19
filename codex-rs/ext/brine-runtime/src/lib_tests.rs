@@ -19,7 +19,7 @@ use super::install;
 use super::outcome_may_have_mutated;
 
 #[test]
-fn install_registers_only_lifecycle_attachment() {
+fn install_registers_runtime_observers_without_model_context() {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
     install(
         &mut builder,
