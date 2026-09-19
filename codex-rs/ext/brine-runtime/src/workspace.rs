@@ -285,7 +285,7 @@ mod tests {
         );
 
         let linked_arg = linked.to_string_lossy().into_owned();
-        run_git(&root, &["worktree", "add", &linked_arg, "-b", "linked-test"]);
+        run_git(&root, &["worktree", "add", "-b", "linked-test", &linked_arg]);
 
         let main_identity = identify_local_workspace(&root);
         let linked_identity = identify_local_workspace(&linked);
