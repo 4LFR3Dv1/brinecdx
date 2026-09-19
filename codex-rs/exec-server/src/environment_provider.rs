@@ -13,6 +13,7 @@ use crate::environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use crate::environment::LOCAL_ENVIRONMENT_ID;
 use crate::environment::REMOTE_ENVIRONMENT_ID;
 
+const BRINECDX_EXECUTION_MODE_ENV_VAR: &str = "BRINECDX_EXECUTION_MODE";
 const BRINE_EXEC_SERVER_URL_ENV_VAR: &str = "BRINE_EXEC_SERVER_URL";
 const BRINE_EXEC_SERVER_TOKEN_ENV_VAR: &str = "BRINE_EXEC_SERVER_TOKEN";
 
@@ -81,11 +82,17 @@ impl DefaultEnvironmentProvider {
         }
     }
 
-    /// Builds a provider by reading the BrineCDX override first and then the
-    /// upstream Codex setting. This keeps upstream behavior unchanged unless
-    /// `BRINE_EXEC_SERVER_URL` is explicitly present.
+    /// Builds the environment provider for BrineCDX.
+    ///
+    /// Local execution is authoritative by default. Merely having a stale
+    /// BRINE_EXEC_SERVER_URL or CODEX_EXEC_SERVER_URL in the parent environment
+    /// must not redirect a BrineCDX session away from its host machine.
+    ///
+    /// The legacy remote exec-server boundary is enabled only when
+    /// BRINECDX_EXECUTION_MODE=remote is explicit.
     pub fn from_env() -> Self {
         Self::from_env_values(
+            std::env::var(BRINECDX_EXECUTION_MODE_ENV_VAR).ok(),
             std::env::var(BRINE_EXEC_SERVER_URL_ENV_VAR).ok(),
             std::env::var(BRINE_EXEC_SERVER_TOKEN_ENV_VAR).ok(),
             std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
@@ -93,17 +100,32 @@ impl DefaultEnvironmentProvider {
     }
 
     fn from_env_values(
+        execution_mode: Option<String>,
         brine_exec_server_url: Option<String>,
         brine_exec_server_token: Option<String>,
         codex_exec_server_url: Option<String>,
     ) -> Self {
-        match brine_exec_server_url {
-            Some(url) => Self {
-                exec_server_url: Some(url),
-                http_headers: brine_authorization_headers(brine_exec_server_token),
-            },
-            None => Self::new(codex_exec_server_url),
+        let mode = execution_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("local");
+
+        if mode.eq_ignore_ascii_case("remote") {
+            return match brine_exec_server_url {
+                Some(url) => Self {
+                    exec_server_url: Some(url),
+                    http_headers: brine_authorization_headers(brine_exec_server_token),
+                },
+                None => Self::new(codex_exec_server_url),
+            };
         }
+
+        // Any non-remote mode is intentionally host-local during the R0
+        // bootstrap. The launcher validates accepted mode names; this provider
+        // is defensive so direct binary launches cannot be hijacked by stale
+        // remote URLs.
+        Self::new(None)
     }
 
     pub(crate) fn snapshot_inner(&self) -> EnvironmentProviderSnapshot {
@@ -182,8 +204,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn brine_exec_server_url_takes_precedence_over_codex_url() {
+    fn stale_remote_urls_do_not_hijack_local_default() {
         let provider = DefaultEnvironmentProvider::from_env_values(
+            None,
+            Some("ws://127.0.0.1:8766".to_string()),
+            Some("must-not-leak".to_string()),
+            Some("ws://127.0.0.1:8765".to_string()),
+        );
+
+        assert!(provider.exec_server_url.is_none());
+        assert!(provider.http_headers.is_empty());
+        let snapshot = provider.snapshot_inner();
+        assert!(snapshot.include_local);
+        assert_eq!(
+            snapshot.default,
+            EnvironmentDefault::EnvironmentId(LOCAL_ENVIRONMENT_ID.to_string())
+        );
+    }
+
+    #[test]
+    fn explicit_remote_mode_uses_brine_url_before_codex_url() {
+        let provider = DefaultEnvironmentProvider::from_env_values(
+            Some("remote".to_string()),
             Some("ws://127.0.0.1:8766".to_string()),
             None,
             Some("ws://127.0.0.1:8765".to_string()),
@@ -195,8 +237,9 @@ mod tests {
     }
 
     #[test]
-    fn codex_exec_server_url_remains_the_fallback() {
+    fn explicit_remote_mode_can_use_upstream_codex_url_as_fallback() {
         let provider = DefaultEnvironmentProvider::from_env_values(
+            Some("remote".to_string()),
             None,
             Some("must-not-leak-to-upstream".to_string()),
             Some("ws://127.0.0.1:8765".to_string()),
@@ -211,6 +254,7 @@ mod tests {
     #[test]
     fn brine_token_becomes_only_a_redacted_websocket_authorization_header() {
         let provider = DefaultEnvironmentProvider::from_env_values(
+            Some("remote".to_string()),
             Some("wss://brine.example/exec".to_string()),
             Some("secret-token-0123456789".to_string()),
             None,
