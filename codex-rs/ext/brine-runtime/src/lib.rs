@@ -27,6 +27,11 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
+use codex_extension_api::ToolFinishInput;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::TurnLifecycleContributor;
+use codex_extension_api::TurnStartInput;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
@@ -277,6 +282,58 @@ fn outcome_may_have_mutated(outcome: ToolCallOutcome) -> bool {
                 handler_executed: false
             }
     )
+}
+
+impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
+    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            self.refresh_workspace_state(input.thread_store, "turn_start");
+        })
+    }
+}
+
+impl<C: Sync> ToolLifecycleContributor for BrineRuntimeExtension<C> {
+    fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            if matches!(
+                input.outcome,
+                codex_extension_api::ToolCallOutcome::Completed { .. }
+                    | codex_extension_api::ToolCallOutcome::Failed {
+                        handler_executed: true
+                    }
+            ) {
+                self.refresh_workspace_state(input.thread_store, "tool_finish");
+            }
+        })
+    }
+}
+
+impl<C: Sync> BrineRuntimeExtension<C> {
+    fn refresh_workspace_state(
+        &self,
+        thread_store: &codex_extension_api::ExtensionData,
+        operation: &str,
+    ) {
+        let Some(current) = thread_store.get::<AttachedRuntime>() else {
+            return;
+        };
+        let material = observe_material_or_warn(&current.local_workspace);
+        let result = self.authority.reconcile(ReconcileRequest {
+            session_id: current.remote.session_id.clone(),
+            workspace_id: current.remote.workspace_id.clone(),
+            work_id: current.remote.work_id.clone(),
+            since_revision: Some(current.state.revision),
+            material,
+        });
+        match result {
+            Ok(snapshot) => {
+                let attached = attached_runtime(snapshot, current.local_workspace.clone());
+                log_attachment_success(operation, &attached);
+                thread_store.insert(attached);
+            }
+            Err(error) => log_attachment_error(operation, error),
+        }
+    }
 }
 
 fn observe_material_or_warn(
