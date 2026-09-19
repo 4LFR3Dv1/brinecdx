@@ -82,6 +82,7 @@ pub(crate) fn thread_extensions(
                 let identity = identify_local_workspace(&root);
                 Some(SessionAttachmentConfig {
                     workspace_key: identity.workspace_key,
+                    workspace_aliases: identity.workspace_aliases,
                     repository_identity: identity.repository_identity.clone(),
                     work_key: String::new(),
                     objective: "BrineCDX workspace work".to_owned(),
