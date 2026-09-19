@@ -28,3 +28,6 @@ pub use model::WorkspaceRevisionRecord;
 pub use model::WorkspaceRecord;
 pub use wire::RuntimeAuthorityServer;
 pub use wire::TcpRuntimeAuthority;
+pub use model::StructuralSymbol;
+pub use model::UnresolvedStructuralRelation;
+pub use model::WorkspaceStructureObservation;
