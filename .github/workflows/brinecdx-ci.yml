@@ -26,8 +26,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Exec-server tests
         run: cargo test -p codex-exec-server environment_provider --lib
-      - name: Brine direct argv tests
-        run: cargo test -p codex-core brine_direct_argv_tests --lib
+      - name: Unified exec shell-semantics tests
+        run: cargo test -p codex-core test_get_command --lib
 
   launcher:
     name: launcher (${{ matrix.os }})
