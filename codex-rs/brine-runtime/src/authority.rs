@@ -140,7 +140,7 @@ impl PersistedRuntimeState {
             .values()
             .find(|workspace| workspace.key == request.workspace_key)
             .map(|workspace| workspace.id.clone());
-        let aliased_workspace_id = exact_workspace_id.is_none().then(|| {
+        let aliased_workspace_id = if exact_workspace_id.is_none() {
             self.workspaces
                 .values()
                 .find(|workspace| {
@@ -150,7 +150,9 @@ impl PersistedRuntimeState {
                         .any(|alias| alias == &workspace.key)
                 })
                 .map(|workspace| workspace.id.clone())
-        }).flatten();
+        } else {
+            None
+        };
 
         let workspace_id = match exact_workspace_id.or(aliased_workspace_id) {
             Some(id) => {
