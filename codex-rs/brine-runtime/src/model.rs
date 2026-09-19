@@ -156,6 +156,8 @@ pub struct RuntimeState {
 pub struct AttachRequest {
     pub session_id: SessionId,
     pub workspace_key: String,
+    #[serde(default)]
+    pub workspace_aliases: Vec<String>,
     pub repository_identity: String,
     pub work_key: String,
     pub objective: String,
