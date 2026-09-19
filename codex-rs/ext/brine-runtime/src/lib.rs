@@ -38,6 +38,8 @@ use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
 
+pub use workspace::WorkspaceIdentity;
+pub use workspace::identify_local_workspace;
 pub use workspace::observe_local_workspace;
 
 /// Local physical reality owned by the Codex host.
