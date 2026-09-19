@@ -294,7 +294,7 @@ impl PersistedRuntimeState {
             state.observation.structure.digest == *structure_digest
         }) {
             previous
-                .map(|state| state.structural_revision)
+                .map(|state| state.structural_revision.max(1))
                 .unwrap_or(1)
         } else {
             previous
