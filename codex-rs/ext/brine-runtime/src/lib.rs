@@ -8,9 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_brine_runtime::AttachRequest;
+use codex_brine_runtime::AttachmentSnapshot;
 use codex_brine_runtime::ReconcileRequest;
 use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::RuntimeAuthorityError;
+use codex_brine_runtime::RuntimeState;
 use codex_brine_runtime::SessionAttachment;
 use codex_brine_runtime::SessionId;
 use codex_extension_api::ExtensionFuture;
@@ -45,10 +47,14 @@ pub struct SessionAttachmentConfig {
 }
 
 /// Runtime attachment retained in the host-owned thread store.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttachedRuntime {
-    /// Durable remote identity and revision returned by the authority.
+    /// Durable remote identity and attachment revision returned by the authority.
     pub remote: SessionAttachment,
+    /// Latest durable runtime state observed by this Codex thread.
+    ///
+    /// This remains host-visible only in R1: it is not contributed to model context.
+    pub state: RuntimeState,
     /// Local physical reality used by shell and filesystem tools.
     pub local_workspace: LocalWorkspace,
 }
@@ -108,10 +114,9 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             });
             match result {
                 Ok(snapshot) => {
-                    input.thread_store.insert(AttachedRuntime {
-                        remote: snapshot.attachment,
-                        local_workspace: config.local_workspace,
-                    });
+                    let attached = attached_runtime(snapshot, config.local_workspace);
+                    log_attachment_success("attach", &attached);
+                    input.thread_store.insert(attached);
                 }
                 Err(error) => log_attachment_error("attach", error),
             }
@@ -131,10 +136,9 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             });
             match result {
                 Ok(snapshot) => {
-                    input.thread_store.insert(AttachedRuntime {
-                        remote: snapshot.attachment,
-                        local_workspace: current.local_workspace.clone(),
-                    });
+                    let attached = attached_runtime(snapshot, current.local_workspace.clone());
+                    log_attachment_success("reconcile", &attached);
+                    input.thread_store.insert(attached);
                 }
                 Err(error) => log_attachment_error("reconcile", error),
             }
@@ -151,6 +155,30 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             }
         })
     }
+}
+
+fn attached_runtime(
+    snapshot: AttachmentSnapshot,
+    local_workspace: LocalWorkspace,
+) -> AttachedRuntime {
+    AttachedRuntime {
+        remote: snapshot.attachment,
+        state: snapshot.state,
+        local_workspace,
+    }
+}
+
+fn log_attachment_success(operation: &str, attached: &AttachedRuntime) {
+    tracing::info!(
+        operation,
+        workspace_id = %attached.remote.workspace_id,
+        work_id = %attached.remote.work_id,
+        session_id = %attached.remote.session_id,
+        attached_revision = attached.remote.attached_revision,
+        runtime_revision = attached.state.revision,
+        pending_delta_count = attached.state.pending_deltas.len(),
+        "Brine runtime session attachment succeeded"
+    );
 }
 
 fn log_attachment_error(operation: &str, error: RuntimeAuthorityError) {
