@@ -238,6 +238,7 @@ mod tests {
 
     use super::identify_local_workspace;
     use super::observe_local_workspace;
+    use super::observe_local_workspace_with_previous;
     use crate::LocalWorkspace;
 
     #[test]
@@ -284,6 +285,63 @@ mod tests {
         fs::remove_dir_all(root).expect("remove temp repository");
     }
 
+
+
+    #[test]
+    fn structural_index_is_reused_until_code_material_changes() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "brine-workspace-structure-cache-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("src")).expect("create source directory");
+        run_git(&root, &["init"]);
+        run_git(&root, &["config", "user.email", "brine@example.invalid"]);
+        run_git(&root, &["config", "user.name", "Brine Test"]);
+        fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").expect("write source");
+        fs::write(root.join("README.md"), "one\n").expect("write readme");
+        run_git(&root, &["add", "."]);
+        run_git(&root, &["commit", "-m", "initial"]);
+
+        let workspace = LocalWorkspace {
+            root: root.clone(),
+            repository_identity: "test-repository".to_owned(),
+        };
+        let mut first = observe_local_workspace(&workspace)
+            .expect("observe initial workspace")
+            .expect("git workspace");
+        assert!(first.structure.symbols.iter().any(|symbol| symbol.name == "run"));
+
+        first.structure.digest = "cached-structure".to_owned();
+        fs::write(root.join("README.md"), "two\n").expect("change non-source file");
+        let docs_changed = observe_local_workspace_with_previous(&workspace, Some(&first))
+            .expect("observe docs change")
+            .expect("git workspace");
+        assert_ne!(docs_changed.material_digest, first.material_digest);
+        assert_eq!(docs_changed.structure.digest, "cached-structure");
+
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn run() {}\npub struct State;\n",
+        )
+        .expect("change source file");
+        let code_changed = observe_local_workspace_with_previous(&workspace, Some(&docs_changed))
+            .expect("observe source change")
+            .expect("git workspace");
+        assert_ne!(code_changed.structure.digest, "cached-structure");
+        assert!(
+            code_changed
+                .structure
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "State")
+        );
+
+        fs::remove_dir_all(root).expect("remove temp repository");
+    }
 
     #[test]
     fn linked_worktree_shares_workspace_identity_without_leaking_origin() {
