@@ -17,7 +17,9 @@ pub fn observe_local_workspace(
     workspace: &LocalWorkspace,
 ) -> Result<Option<WorkspaceMaterialObservation>, String> {
     let root = workspace.root.as_path();
-    let inside = git_output(root, &["rev-parse", "--is-inside-work-tree"])?;
+    let Some(inside) = git_output_optional(root, &["rev-parse", "--is-inside-work-tree"]) else {
+        return Ok(None);
+    };
     if trim_ascii(&inside) != b"true" {
         return Ok(None);
     }
