@@ -18,6 +18,7 @@ fn authority_survives_session_and_replays_remote_delta() {
             work_key: "work:runtime-reset".to_owned(),
             objective: "implement R1".to_owned(),
             since_revision: None,
+            material: None,
         })
         .expect("attach first session");
     let first_revision = first.state.revision;
@@ -50,6 +51,7 @@ fn authority_survives_session_and_replays_remote_delta() {
             work_key: "work:runtime-reset".to_owned(),
             objective: "implement R1".to_owned(),
             since_revision: Some(first_revision),
+            material: None,
         })
         .expect("attach second session");
 
@@ -70,6 +72,7 @@ fn authority_survives_session_and_replays_remote_delta() {
             workspace_id: second.attachment.workspace_id.clone(),
             work_id: second.attachment.work_id.clone(),
             since_revision: Some(second.state.revision),
+            material: None,
         })
         .expect("reconcile second session");
     assert!(reconciled.state.pending_deltas.is_empty());
