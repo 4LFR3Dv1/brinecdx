@@ -206,6 +206,7 @@ mod tests {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
+    use super::identify_local_workspace;
     use super::observe_local_workspace;
     use crate::LocalWorkspace;
 
@@ -251,6 +252,55 @@ mod tests {
         assert!(changed.file_digests.contains_key("tracked.txt"));
 
         fs::remove_dir_all(root).expect("remove temp repository");
+    }
+
+
+    #[test]
+    fn linked_worktree_shares_workspace_identity_without_leaking_origin() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "brine-workspace-identity-{}-{nonce}",
+            std::process::id()
+        ));
+        let root = base.join("main");
+        let linked = base.join("linked");
+        fs::create_dir_all(&root).expect("create temp repository");
+        run_git(&root, &["init"]);
+        run_git(&root, &["config", "user.email", "brine@example.invalid"]);
+        run_git(&root, &["config", "user.name", "Brine Test"]);
+        fs::write(root.join("tracked.txt"), "one\n").expect("write tracked file");
+        run_git(&root, &["add", "tracked.txt"]);
+        run_git(&root, &["commit", "-m", "initial"]);
+        run_git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://user:supersecret@example.invalid/org/repo.git",
+            ],
+        );
+
+        let linked_arg = linked.to_string_lossy().into_owned();
+        run_git(&root, &["worktree", "add", &linked_arg, "-b", "linked-test"]);
+
+        let main_identity = identify_local_workspace(&root);
+        let linked_identity = identify_local_workspace(&linked);
+
+        assert_eq!(main_identity.workspace_key, linked_identity.workspace_key);
+        assert_eq!(
+            main_identity.repository_identity,
+            linked_identity.repository_identity
+        );
+        assert!(main_identity.repository_identity.starts_with("origin-sha256:"));
+        assert!(!main_identity.repository_identity.contains("supersecret"));
+        assert!(!main_identity.repository_identity.contains("example.invalid"));
+
+        run_git(&root, &["worktree", "remove", "--force", &linked_arg]);
+        fs::remove_dir_all(base).expect("remove temp repository");
     }
 
     fn run_git(root: &std::path::Path, args: &[&str]) {
