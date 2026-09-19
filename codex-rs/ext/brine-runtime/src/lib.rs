@@ -19,6 +19,7 @@ use codex_brine_runtime::ReconcileRequest;
 use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::RuntimeAuthorityError;
 use codex_brine_runtime::RuntimeState;
+use codex_brine_runtime::RUNTIME_PROTOCOL_VERSION;
 use codex_brine_runtime::SessionAttachment;
 use codex_brine_runtime::SessionId;
 use codex_extension_api::CommandStartInput;
@@ -336,6 +337,13 @@ fn attached_runtime(
     snapshot: AttachmentSnapshot,
     local_workspace: LocalWorkspace,
 ) -> AttachedRuntime {
+    if snapshot.protocol_version != RUNTIME_PROTOCOL_VERSION {
+        tracing::warn!(
+            expected = RUNTIME_PROTOCOL_VERSION,
+            actual = snapshot.protocol_version,
+            "Brine runtime protocol version mismatch"
+        );
+    }
     AttachedRuntime {
         remote: snapshot.attachment,
         state: snapshot.state,
