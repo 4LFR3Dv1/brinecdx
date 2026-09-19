@@ -11,6 +11,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 const SOURCE_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx"];
+const MAX_STRUCTURE_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 pub(crate) fn observe_structure(root: &Path) -> Result<WorkspaceStructureObservation, String> {
     let paths = source_paths(root)?;
@@ -21,6 +22,17 @@ pub(crate) fn observe_structure(root: &Path) -> Result<WorkspaceStructureObserva
     for path in paths {
         let absolute = root.join(&path);
         if !absolute.is_file() {
+            continue;
+        }
+        let metadata = fs::metadata(&absolute)
+            .map_err(|error| format!("failed reading metadata {}: {error}", absolute.display()))?;
+        if metadata.len() > MAX_STRUCTURE_FILE_BYTES {
+            unresolved_relations.push(UnresolvedStructuralRelation {
+                path: path.clone(),
+                kind: "unindexed_file".to_owned(),
+                target: format!("too_large:{}", metadata.len()),
+                line: 0,
+            });
             continue;
         }
         let bytes = fs::read(&absolute)
