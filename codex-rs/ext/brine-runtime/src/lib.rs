@@ -22,9 +22,13 @@ use codex_brine_runtime::RuntimeState;
 use codex_brine_runtime::RUNTIME_PROTOCOL_VERSION;
 use codex_brine_runtime::SessionAttachment;
 use codex_brine_runtime::SessionId;
+use codex_brine_runtime::UpdateWorkRequest;
+use codex_brine_runtime::WorkStatus;
 use codex_extension_api::CommandStartInput;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ThreadIdleCause;
+use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
@@ -150,6 +154,19 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 return;
             };
             let session_id = SessionId::from(input.session_store.level_id());
+            let parent_session_id = input
+                .session_source
+                .parent_thread_id()
+                .map(|thread_id| SessionId::from(thread_id.to_string()));
+            let objective = if parent_session_id.is_some() {
+                input
+                    .session_source
+                    .get_agent_path()
+                    .map(|path| path.to_string())
+                    .unwrap_or_else(|| config.objective.clone())
+            } else {
+                config.objective.clone()
+            };
             let material = observe_material_or_warn(&config.local_workspace, None);
             let result = self.authority.attach(AttachRequest {
                 session_id,
@@ -157,7 +174,8 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 workspace_aliases: config.workspace_aliases,
                 repository_identity: config.repository_identity.clone(),
                 work_key: config.work_key,
-                objective: config.objective,
+                objective,
+                parent_session_id,
                 since_revision: None,
                 material,
             });
@@ -204,6 +222,23 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 }
                 Err(error) => log_attachment_error("reconcile", error),
             }
+        })
+    }
+
+    fn on_thread_idle<'a>(&'a self, input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(current) = input.thread_store.get::<AttachedRuntime>() else {
+                return;
+            };
+            if current.state.work.parent_work.is_none() {
+                return;
+            }
+            let status = match input.cause {
+                ThreadIdleCause::Completed => WorkStatus::Complete,
+                ThreadIdleCause::Interrupted => WorkStatus::Paused,
+                ThreadIdleCause::Failed => WorkStatus::Failed,
+            };
+            self.update_work_state(input.thread_store, None, Some(status), "thread_idle");
         })
     }
 
@@ -257,6 +292,35 @@ impl<C: Sync> ToolLifecycleContributor for BrineRuntimeExtension<C> {
 }
 
 impl<C: Sync> BrineRuntimeExtension<C> {
+    fn update_work_state(
+        &self,
+        thread_store: &codex_extension_api::ExtensionData,
+        objective: Option<String>,
+        status: Option<WorkStatus>,
+        operation: &str,
+    ) {
+        let Some(current) = thread_store.get::<AttachedRuntime>() else {
+            return;
+        };
+        let result = self.authority.update_work(UpdateWorkRequest {
+            session_id: current.remote.session_id.clone(),
+            objective,
+            status,
+            since_revision: Some(current.state.revision),
+        });
+        match result {
+            Ok(snapshot) => {
+                if !snapshot_protocol_compatible(operation, &snapshot) {
+                    return;
+                }
+                let attached = attached_runtime(snapshot, current.local_workspace.clone());
+                log_attachment_success(operation, &attached);
+                thread_store.insert(attached);
+            }
+            Err(error) => log_attachment_error(operation, error),
+        }
+    }
+
     fn refresh_workspace_state(
         &self,
         thread_store: &codex_extension_api::ExtensionData,
@@ -320,6 +384,21 @@ fn outcome_may_have_mutated(outcome: ToolCallOutcome) -> bool {
 impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
+            if input
+                .thread_store
+                .get::<AttachedRuntime>()
+                .is_some_and(|current| {
+                    current.state.work.parent_work.is_some()
+                        && current.state.work.status != WorkStatus::Active
+                })
+            {
+                self.update_work_state(
+                    input.thread_store,
+                    None,
+                    Some(WorkStatus::Active),
+                    "turn_start_work",
+                );
+            }
             self.refresh_workspace_state(input.thread_store, "turn_start", true);
         })
     }
