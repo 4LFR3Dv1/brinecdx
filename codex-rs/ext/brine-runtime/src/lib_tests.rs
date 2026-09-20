@@ -12,6 +12,7 @@ use codex_brine_runtime::WorkRecord;
 use codex_brine_runtime::WorkStatus;
 use codex_brine_runtime::WorkspaceId;
 use codex_brine_runtime::WorkspaceRecord;
+use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ToolCallOutcome;
 use codex_protocol::ThreadId;
@@ -22,6 +23,7 @@ use super::LocalWorkspace;
 use super::attached_runtime;
 use super::install;
 use super::outcome_may_have_mutated;
+use super::runtime_session_id;
 use super::snapshot_protocol_compatible;
 use super::work_start_identity;
 
@@ -173,6 +175,27 @@ fn thread_spawn_source_maps_to_parent_work_lineage_without_tool_output_parsing()
         work_start_identity(&SessionSource::Cli, "root objective");
     assert!(root_parent.is_none());
     assert_eq!(root_objective, "root objective");
+}
+
+#[test]
+fn runtime_session_identity_uses_concrete_thread_store_for_subagents() {
+    let root_thread = ThreadId::new();
+    let child_thread = ThreadId::new();
+
+    // Codex deliberately shares the root session identity across the agent tree,
+    // while each thread gets its own thread-scoped ExtensionData.
+    let session_store = ExtensionData::new(root_thread.to_string());
+    let thread_store = ExtensionData::new(child_thread.to_string());
+
+    assert_ne!(session_store.level_id(), thread_store.level_id());
+    assert_eq!(
+        runtime_session_id(&thread_store),
+        SessionId::from(child_thread.to_string())
+    );
+    assert_ne!(
+        runtime_session_id(&thread_store),
+        SessionId::from(root_thread.to_string())
+    );
 }
 
 #[test]
