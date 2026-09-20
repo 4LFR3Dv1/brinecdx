@@ -19,6 +19,9 @@ use crate::RuntimeState;
 use crate::SessionAttachment;
 use crate::SessionId;
 use crate::WorkId;
+use crate::WorkStatus;
+use crate::WorkGraphSnapshot;
+use crate::UpdateWorkRequest;
 use crate::WorkRecord;
 use crate::WorkspaceId;
 use crate::WorkspaceMaterialObservation;
@@ -41,6 +44,10 @@ pub enum RuntimeAuthorityError {
     WorkNotFound(WorkId),
     #[error("session {0} is not attached to work {1}")]
     SessionNotAttached(SessionId, WorkId),
+    #[error("session {0} has no durable work binding")]
+    SessionNotBound(SessionId),
+    #[error("parent session {0} has no durable work binding")]
+    ParentSessionNotBound(SessionId),
     #[error("remote runtime authority failed: {0}")]
     Remote(String),
 }
@@ -70,7 +77,13 @@ pub trait RuntimeAuthority: Send + Sync {
         since_revision: Option<u64>,
     ) -> Result<RuntimeState, RuntimeAuthorityError>;
 
-    /// Detach a session without deleting its workspace or work.
+    /// Update Work semantics for the Work bound to a live session.
+    fn update_work(
+        &self,
+        request: UpdateWorkRequest,
+    ) -> Result<AttachmentSnapshot, RuntimeAuthorityError>;
+
+    /// Detach a session without deleting its workspace, Work, or durable thread binding.
     fn detach(&self, session_id: &SessionId) -> Result<(), RuntimeAuthorityError>;
 
     /// Record a logical event while no Codex session is attached.
@@ -86,6 +99,8 @@ struct PersistedRuntimeState {
     revision: u64,
     workspaces: BTreeMap<String, WorkspaceRecord>,
     works: BTreeMap<String, WorkRecord>,
+    #[serde(default)]
+    thread_bindings: BTreeMap<String, WorkId>,
     attachments: BTreeMap<String, SessionAttachment>,
     deltas: Vec<RemoteDelta>,
     #[serde(default)]
@@ -118,10 +133,24 @@ impl PersistedRuntimeState {
             .filter(|delta| delta.work_id == *work_id && delta.revision > minimum_revision)
             .cloned()
             .collect();
+        let mut nodes: Vec<WorkRecord> = self
+            .works
+            .values()
+            .filter(|candidate| candidate.workspace_id == *workspace_id)
+            .cloned()
+            .collect();
+        nodes.sort_by(|left, right| {
+            (left.created_revision, left.id.as_str())
+                .cmp(&(right.created_revision, right.id.as_str()))
+        });
         Ok(RuntimeState {
             revision: self.revision,
             workspace,
-            work,
+            work: work.clone(),
+            work_graph: Some(WorkGraphSnapshot {
+                active_work: work.id.clone(),
+                nodes,
+            }),
             workspace_material: self.workspace_material.get(workspace_id.as_str()).cloned(),
             pending_deltas,
         })
@@ -193,12 +222,28 @@ impl PersistedRuntimeState {
 
         self.apply_workspace_material(&workspace_id, request.material.as_ref());
 
-        let work_id = self
-            .works
-            .values()
-            .find(|work| work.workspace_id == workspace_id && work.key == work_key)
-            .map(|work| work.id.clone())
-            .unwrap_or_else(|| {
+        let existing_binding = self
+            .thread_bindings
+            .get(request.session_id.as_str())
+            .cloned();
+
+        let work_id = if let Some(work_id) = existing_binding {
+            work_id
+        } else if let Some(parent_session_id) = request.parent_session_id.as_ref() {
+            let parent_work = self
+                .thread_bindings
+                .get(parent_session_id.as_str())
+                .cloned()
+                .ok_or_else(|| {
+                    RuntimeAuthorityError::ParentSessionNotBound(parent_session_id.clone())
+                })?;
+            let child_key = format!("thread:{}", request.session_id);
+            let existing_child = self
+                .works
+                .values()
+                .find(|work| work.workspace_id == workspace_id && work.key == child_key)
+                .map(|work| work.id.clone());
+            existing_child.unwrap_or_else(|| {
                 let id = WorkId::new();
                 self.revision += 1;
                 self.works.insert(
@@ -206,14 +251,69 @@ impl PersistedRuntimeState {
                     WorkRecord {
                         id: id.clone(),
                         workspace_id: workspace_id.clone(),
-                        key: work_key.clone(),
+                        key: child_key,
+                        parent_work: Some(parent_work),
                         objective: request.objective.clone(),
+                        status: WorkStatus::Active,
+                        assigned_thread: Some(request.session_id.clone()),
+                        candidate: None,
                         created_revision: self.revision,
                         last_revision: self.revision,
                     },
                 );
                 id
-            });
+            })
+        } else {
+            self.works
+                .values()
+                .find(|work| work.workspace_id == workspace_id && work.key == work_key)
+                .map(|work| work.id.clone())
+                .unwrap_or_else(|| {
+                    let id = WorkId::new();
+                    self.revision += 1;
+                    self.works.insert(
+                        id.to_string(),
+                        WorkRecord {
+                            id: id.clone(),
+                            workspace_id: workspace_id.clone(),
+                            key: work_key.clone(),
+                            parent_work: None,
+                            objective: request.objective.clone(),
+                            status: WorkStatus::Active,
+                            assigned_thread: Some(request.session_id.clone()),
+                            candidate: None,
+                            created_revision: self.revision,
+                            last_revision: self.revision,
+                        },
+                    );
+                    id
+                })
+        };
+
+        self.thread_bindings
+            .insert(request.session_id.to_string(), work_id.clone());
+
+        let mut work_transition = false;
+        if let Some(work) = self.works.get_mut(work_id.as_str()) {
+            if work.assigned_thread.as_ref() != Some(&request.session_id) {
+                work.assigned_thread = Some(request.session_id.clone());
+                work_transition = true;
+            }
+            if work.status != WorkStatus::Active {
+                work.status = WorkStatus::Active;
+                work_transition = true;
+            }
+            if work.objective.is_empty() && !request.objective.is_empty() {
+                work.objective = request.objective.clone();
+                work_transition = true;
+            }
+        }
+        if work_transition {
+            self.revision += 1;
+            if let Some(work) = self.works.get_mut(work_id.as_str()) {
+                work.last_revision = self.revision;
+            }
+        }
 
         let attachment = SessionAttachment {
             session_id: request.session_id.clone(),
@@ -266,6 +366,69 @@ impl PersistedRuntimeState {
             state: self.snapshot(
                 &request.workspace_id,
                 &request.work_id,
+                request.since_revision,
+            )?,
+            attachment,
+        })
+    }
+
+    fn update_work(
+        &mut self,
+        request: &UpdateWorkRequest,
+    ) -> Result<AttachmentSnapshot, RuntimeAuthorityError> {
+        let work_id = self
+            .thread_bindings
+            .get(request.session_id.as_str())
+            .cloned()
+            .ok_or_else(|| RuntimeAuthorityError::SessionNotBound(request.session_id.clone()))?;
+        let attachment = self
+            .attachments
+            .get(request.session_id.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                RuntimeAuthorityError::SessionNotAttached(
+                    request.session_id.clone(),
+                    work_id.clone(),
+                )
+            })?;
+
+        let mut changed = false;
+        if let Some(work) = self.works.get_mut(work_id.as_str()) {
+            if let Some(objective) = request.objective.as_ref()
+                && work.objective != *objective
+            {
+                work.objective = objective.clone();
+                changed = true;
+            }
+            if let Some(status) = request.status
+                && work.status != status
+            {
+                work.status = status;
+                changed = true;
+            }
+        } else {
+            return Err(RuntimeAuthorityError::WorkNotFound(work_id));
+        }
+
+        if changed {
+            self.revision += 1;
+            let work = self
+                .works
+                .get_mut(work_id.as_str())
+                .expect("validated work must remain present");
+            work.last_revision = self.revision;
+        }
+
+        let mut attachment = attachment;
+        attachment.attached_revision = self.revision;
+        self.attachments
+            .insert(request.session_id.to_string(), attachment.clone());
+
+        Ok(AttachmentSnapshot {
+            protocol_version: RUNTIME_PROTOCOL_VERSION,
+            state: self.snapshot(
+                &attachment.workspace_id,
+                &attachment.work_id,
                 request.since_revision,
             )?,
             attachment,
@@ -392,6 +555,13 @@ impl RuntimeAuthority for FileRuntimeAuthority {
         read_state(&self.path)?.snapshot(workspace_id, work_id, since_revision)
     }
 
+    fn update_work(
+        &self,
+        request: UpdateWorkRequest,
+    ) -> Result<AttachmentSnapshot, RuntimeAuthorityError> {
+        self.update(|state| state.update_work(&request))
+    }
+
     fn detach(&self, session_id: &SessionId) -> Result<(), RuntimeAuthorityError> {
         self.update(|state| {
             state.attachments.remove(session_id.as_str());
@@ -436,6 +606,14 @@ impl RuntimeAuthority for InMemoryRuntimeAuthority {
     ) -> Result<RuntimeState, RuntimeAuthorityError> {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.snapshot(workspace_id, work_id, since_revision)
+    }
+
+    fn update_work(
+        &self,
+        request: UpdateWorkRequest,
+    ) -> Result<AttachmentSnapshot, RuntimeAuthorityError> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.update_work(&request)
     }
 
     fn detach(&self, session_id: &SessionId) -> Result<(), RuntimeAuthorityError> {
