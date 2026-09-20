@@ -399,7 +399,16 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
         .as_ref()
         .expect("changed material state should exist");
     assert_eq!(changed_material.material_revision, 2);
-    assert_eq!(changed_material.runtime_revision, changed.state.revision);
+    assert_eq!(
+        changed_material.runtime_revision,
+        same.state.revision + 1,
+        "material state must retain the exact runtime revision of the material transition"
+    );
+    assert_eq!(
+        changed.state.revision,
+        changed_material.runtime_revision + 1,
+        "binding the new thread to existing Work is a distinct runtime transition"
+    );
 
     drop(authority);
 
