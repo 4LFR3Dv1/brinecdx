@@ -14,12 +14,16 @@ use codex_brine_runtime::WorkspaceId;
 use codex_brine_runtime::WorkspaceRecord;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ToolCallOutcome;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 
 use super::LocalWorkspace;
 use super::attached_runtime;
 use super::install;
 use super::outcome_may_have_mutated;
 use super::snapshot_protocol_compatible;
+use super::work_start_identity;
 
 #[test]
 fn install_registers_runtime_observers_without_model_context() {
@@ -142,6 +146,33 @@ fn incompatible_runtime_protocol_is_rejected() {
     };
 
     assert!(!snapshot_protocol_compatible("test", &snapshot));
+}
+
+
+#[test]
+fn thread_spawn_source_maps_to_parent_work_lineage_without_tool_output_parsing() {
+    let parent = ThreadId::new();
+    let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: parent,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+
+    let (parent_session_id, objective) =
+        work_start_identity(&source, "fallback child objective");
+
+    assert_eq!(
+        parent_session_id,
+        Some(SessionId::from(parent.to_string()))
+    );
+    assert_eq!(objective, "fallback child objective");
+
+    let (root_parent, root_objective) =
+        work_start_identity(&SessionSource::Cli, "root objective");
+    assert!(root_parent.is_none());
+    assert_eq!(root_objective, "root objective");
 }
 
 #[test]
