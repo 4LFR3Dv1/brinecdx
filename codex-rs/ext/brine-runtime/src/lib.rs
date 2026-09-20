@@ -8,6 +8,8 @@ mod structure;
 mod workspace;
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -86,11 +88,15 @@ pub struct AttachedRuntime {
 }
 
 type ConfigResolver<C> = dyn Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync;
+pub type WorkObjectiveFuture = Pin<Box<dyn Future<Output = Option<String>> + Send + 'static>>;
+pub type WorkObjectiveResolver =
+    dyn Fn(SessionId) -> WorkObjectiveFuture + Send + Sync + 'static;
 
 /// A lifecycle contributor that attaches and reconciles persistent Brine work.
 pub struct BrineRuntimeExtension<C> {
     authority: Arc<dyn RuntimeAuthority>,
     config: Arc<ConfigResolver<C>>,
+    objective_resolver: Arc<WorkObjectiveResolver>,
 }
 
 impl<C> std::fmt::Debug for BrineRuntimeExtension<C> {
@@ -106,10 +112,12 @@ impl<C> BrineRuntimeExtension<C> {
     pub fn new(
         authority: Arc<dyn RuntimeAuthority>,
         config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
+        objective_resolver: Arc<WorkObjectiveResolver>,
     ) -> Self {
         Self {
             authority,
             config: Arc::new(config),
+            objective_resolver,
         }
     }
 }
@@ -120,7 +128,25 @@ pub fn install<C: Sync + 'static>(
     authority: Arc<dyn RuntimeAuthority>,
     config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
 ) {
-    let extension = Arc::new(BrineRuntimeExtension::new(authority, config));
+    install_with_objective_resolver(
+        builder,
+        authority,
+        config,
+        Arc::new(|_| Box::pin(async { None })),
+    );
+}
+
+pub fn install_with_objective_resolver<C: Sync + 'static>(
+    builder: &mut ExtensionRegistryBuilder<C>,
+    authority: Arc<dyn RuntimeAuthority>,
+    config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
+    objective_resolver: Arc<WorkObjectiveResolver>,
+) {
+    let extension = Arc::new(BrineRuntimeExtension::new(
+        authority,
+        config,
+        objective_resolver,
+    ));
     builder.thread_lifecycle_contributor(extension.clone());
     builder.turn_lifecycle_contributor(extension.clone());
     builder.tool_lifecycle_contributor(extension);
@@ -384,20 +410,23 @@ fn outcome_may_have_mutated(outcome: ToolCallOutcome) -> bool {
 impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if input
-                .thread_store
-                .get::<AttachedRuntime>()
-                .is_some_and(|current| {
-                    current.state.work.parent_work.is_some()
-                        && current.state.work.status != WorkStatus::Active
-                })
-            {
-                self.update_work_state(
-                    input.thread_store,
-                    None,
-                    Some(WorkStatus::Active),
-                    "turn_start_work",
-                );
+            if let Some(current) = input.thread_store.get::<AttachedRuntime>() {
+                let objective = (self.objective_resolver)(current.remote.session_id.clone()).await;
+                let status = (current.state.work.parent_work.is_some()
+                    && current.state.work.status != WorkStatus::Active)
+                    .then_some(WorkStatus::Active);
+                if objective
+                    .as_ref()
+                    .is_some_and(|value| value != &current.state.work.objective)
+                    || status.is_some()
+                {
+                    self.update_work_state(
+                        input.thread_store,
+                        objective,
+                        status,
+                        "turn_start_work",
+                    );
+                }
             }
             self.refresh_workspace_state(input.thread_store, "turn_start", true);
         })
