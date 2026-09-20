@@ -88,15 +88,20 @@ pub struct AttachedRuntime {
 }
 
 type ConfigResolver<C> = dyn Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync;
-pub type WorkObjectiveFuture = Pin<Box<dyn Future<Output = Option<String>> + Send + 'static>>;
-pub type WorkObjectiveResolver =
-    dyn Fn(SessionId) -> WorkObjectiveFuture + Send + Sync + 'static;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkGoalState {
+    pub objective: String,
+    pub status: WorkStatus,
+}
+
+pub type WorkGoalFuture = Pin<Box<dyn Future<Output = Option<WorkGoalState>> + Send + 'static>>;
+pub type WorkGoalResolver = dyn Fn(SessionId) -> WorkGoalFuture + Send + Sync + 'static;
 
 /// A lifecycle contributor that attaches and reconciles persistent Brine work.
 pub struct BrineRuntimeExtension<C> {
     authority: Arc<dyn RuntimeAuthority>,
     config: Arc<ConfigResolver<C>>,
-    objective_resolver: Arc<WorkObjectiveResolver>,
+    goal_resolver: Arc<WorkGoalResolver>,
 }
 
 impl<C> std::fmt::Debug for BrineRuntimeExtension<C> {
@@ -112,12 +117,12 @@ impl<C> BrineRuntimeExtension<C> {
     pub fn new(
         authority: Arc<dyn RuntimeAuthority>,
         config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
-        objective_resolver: Arc<WorkObjectiveResolver>,
+        goal_resolver: Arc<WorkGoalResolver>,
     ) -> Self {
         Self {
             authority,
             config: Arc::new(config),
-            objective_resolver,
+            goal_resolver,
         }
     }
 }
@@ -128,7 +133,7 @@ pub fn install<C: Sync + 'static>(
     authority: Arc<dyn RuntimeAuthority>,
     config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
 ) {
-    install_with_objective_resolver(
+    install_with_goal_resolver(
         builder,
         authority,
         config,
@@ -136,16 +141,16 @@ pub fn install<C: Sync + 'static>(
     );
 }
 
-pub fn install_with_objective_resolver<C: Sync + 'static>(
+pub fn install_with_goal_resolver<C: Sync + 'static>(
     builder: &mut ExtensionRegistryBuilder<C>,
     authority: Arc<dyn RuntimeAuthority>,
     config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
-    objective_resolver: Arc<WorkObjectiveResolver>,
+    goal_resolver: Arc<WorkObjectiveResolver>,
 ) {
     let extension = Arc::new(BrineRuntimeExtension::new(
         authority,
         config,
-        objective_resolver,
+        goal_resolver,
     ));
     builder.thread_lifecycle_contributor(extension.clone());
     builder.turn_lifecycle_contributor(extension.clone());
@@ -411,15 +416,20 @@ impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             if let Some(current) = input.thread_store.get::<AttachedRuntime>() {
-                let objective = (self.objective_resolver)(current.remote.session_id.clone()).await;
-                let status = (current.state.work.parent_work.is_some()
+                let goal = (self.goal_resolver)(current.remote.session_id.clone()).await;
+                let fallback_status = (goal.is_none()
+                    && current.state.work.parent_work.is_some()
                     && current.state.work.status != WorkStatus::Active)
                     .then_some(WorkStatus::Active);
-                if objective
-                    .as_ref()
-                    .is_some_and(|value| value != &current.state.work.objective)
-                    || status.is_some()
-                {
+                let objective = goal.as_ref().and_then(|goal| {
+                    (goal.objective != current.state.work.objective)
+                        .then(|| goal.objective.clone())
+                });
+                let goal_status = goal.as_ref().and_then(|goal| {
+                    (goal.status != current.state.work.status).then_some(goal.status)
+                });
+                let status = goal_status.or(fallback_status);
+                if objective.is_some() || status.is_some() {
                     self.update_work_state(
                         input.thread_store,
                         objective,
