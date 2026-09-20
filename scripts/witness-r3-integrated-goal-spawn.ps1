@@ -51,8 +51,10 @@ function Wait-Listener {
             if ($Process.HasExited) {
                 $details = ''
                 if ($ErrorLog -and (Test-Path $ErrorLog)) {
-                    $details = [string](Get-Content -LiteralPath $ErrorLog -Raw -ErrorAction SilentlyContinue)
-                    $details = $details.Trim()
+                    $rawDetails = Get-Content -LiteralPath $ErrorLog -Raw -ErrorAction SilentlyContinue
+                    if ($null -ne $rawDetails) {
+                        $details = ([string]$rawDetails).Trim()
+                    }
                 }
                 if ($details) {
                     throw "Process exited before listener on port $Port (exit=$($Process.ExitCode)). stderr: $details"
@@ -66,8 +68,10 @@ function Wait-Listener {
 
     $details = ''
     if ($ErrorLog -and (Test-Path $ErrorLog)) {
-        $details = [string](Get-Content -LiteralPath $ErrorLog -Raw -ErrorAction SilentlyContinue)
-        $details = $details.Trim()
+        $rawDetails = Get-Content -LiteralPath $ErrorLog -Raw -ErrorAction SilentlyContinue
+        if ($null -ne $rawDetails) {
+            $details = ([string]$rawDetails).Trim()
+        }
     }
     if ($details) {
         throw "Timed out waiting for listener on port $Port after $($Timeout)s. stderr: $details"
