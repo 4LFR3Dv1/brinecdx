@@ -94,8 +94,16 @@ function Start-Runtime {
         RedirectStandardError = (Join-Path $logDir 'runtime.stderr.log')
     }
     $process = Start-Process @args
-    Wait-Listener -Port $RuntimePort -Timeout 10 -Process $process -ErrorLog (Join-Path $logDir 'runtime.stderr.log')
-    return $process
+    try {
+        Wait-Listener -Port $RuntimePort -Timeout 10 -Process $process -ErrorLog (Join-Path $logDir 'runtime.stderr.log')
+        return $process
+    }
+    catch {
+        if ($process -and -not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
 }
 
 function Start-AppServer {
@@ -103,6 +111,7 @@ function Start-AppServer {
     $previousSqliteHome = $env:CODEX_SQLITE_HOME
     $env:BRINECDX_RUNTIME_AUTHORITY_ADDR = "127.0.0.1:$RuntimePort"
     $env:CODEX_SQLITE_HOME = $sqliteHome
+    $process = $null
     try {
         $args = @{
             FilePath = $appServerExe
@@ -114,6 +123,14 @@ function Start-AppServer {
             RedirectStandardError = (Join-Path $logDir 'app-server.stderr.log')
         }
         $process = Start-Process @args
+        Wait-Listener -Port $AppServerPort -Timeout 40 -Process $process -ErrorLog (Join-Path $logDir 'app-server.stderr.log')
+        return $process
+    }
+    catch {
+        if ($process -and -not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
+        throw
     }
     finally {
         if ($null -eq $previousRuntime) {
@@ -127,8 +144,6 @@ function Start-AppServer {
             $env:CODEX_SQLITE_HOME = $previousSqliteHome
         }
     }
-    Wait-Listener -Port $AppServerPort -Timeout 40 -Process $process -ErrorLog (Join-Path $logDir 'app-server.stderr.log')
-    return $process
 }
 
 function Send-WsJson {
