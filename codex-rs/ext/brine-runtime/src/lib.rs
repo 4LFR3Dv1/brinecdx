@@ -145,7 +145,7 @@ pub fn install_with_goal_resolver<C: Sync + 'static>(
     builder: &mut ExtensionRegistryBuilder<C>,
     authority: Arc<dyn RuntimeAuthority>,
     config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
-    goal_resolver: Arc<WorkObjectiveResolver>,
+    goal_resolver: Arc<WorkGoalResolver>,
 ) {
     let extension = Arc::new(BrineRuntimeExtension::new(
         authority,
