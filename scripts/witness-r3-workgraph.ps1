@@ -83,14 +83,18 @@ function Invoke-BrineRuntime {
     try {
         $client.Connect('127.0.0.1', $RuntimePort)
         $stream = $client.GetStream()
-        $writer = [IO.StreamWriter]::new($stream, [Text.Encoding]::UTF8, 65536, $true)
-        $writer.NewLine = [Environment]::NewLine
+        $utf8NoBom = [Text.UTF8Encoding]::new($false)
+        $writer = [IO.StreamWriter]::new($stream, $utf8NoBom, 65536, $true)
+        $writer.NewLine = [char]10
         $writer.WriteLine($request)
         $writer.Flush()
         $client.Client.Shutdown([Net.Sockets.SocketShutdown]::Send)
 
-        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8)
+        $reader = [IO.StreamReader]::new($stream, $utf8NoBom)
         $responseText = $reader.ReadToEnd()
+        if ([string]::IsNullOrWhiteSpace($responseText)) {
+            throw "$Operation failed: runtime returned an empty response"
+        }
         $response = $responseText | ConvertFrom-Json
         if ($response.error) {
             throw "$Operation failed: $($response.error)"
