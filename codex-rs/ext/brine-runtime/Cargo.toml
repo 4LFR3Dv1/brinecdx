@@ -14,5 +14,6 @@ workspace = true
 [dependencies]
 codex-brine-runtime = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-protocol = { workspace = true }
 sha2 = { workspace = true }
 tracing = { workspace = true }
