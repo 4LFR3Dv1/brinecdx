@@ -74,7 +74,9 @@ pub(crate) fn thread_extensions(
         builder.turn_start_admission(admission);
     }
     if let Some(address) = brine_runtime_authority_address() {
-        codex_brine_runtime_extension::install(
+        let brine_goal_service = goal_service.clone();
+        let brine_state_db = state_db.clone();
+        codex_brine_runtime_extension::install_with_objective_resolver(
             &mut builder,
             Arc::new(TcpRuntimeAuthority::new(address)),
             |config: &Config| {
@@ -92,6 +94,20 @@ pub(crate) fn thread_extensions(
                     },
                 })
             },
+            Arc::new(move |session_id| {
+                let goal_service = brine_goal_service.clone();
+                let state_db = brine_state_db.clone();
+                Box::pin(async move {
+                    let state_db = state_db?;
+                    let thread_id = ThreadId::from_string(session_id.as_str()).ok()?;
+                    goal_service
+                        .get_thread_goal(&state_db, thread_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|goal| goal.objective)
+                })
+            }),
         );
     }
     if let Some(queue_service) = queue_service {
