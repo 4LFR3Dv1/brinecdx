@@ -42,6 +42,7 @@ use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
+use codex_protocol::protocol::SessionSource;
 
 pub use workspace::WorkspaceIdentity;
 pub use workspace::identify_local_workspace;
@@ -185,19 +186,8 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 return;
             };
             let session_id = SessionId::from(input.session_store.level_id());
-            let parent_session_id = input
-                .session_source
-                .parent_thread_id()
-                .map(|thread_id| SessionId::from(thread_id.to_string()));
-            let objective = if parent_session_id.is_some() {
-                input
-                    .session_source
-                    .get_agent_path()
-                    .map(|path| path.to_string())
-                    .unwrap_or_else(|| config.objective.clone())
-            } else {
-                config.objective.clone()
-            };
+            let (parent_session_id, objective) =
+                work_start_identity(input.session_source, &config.objective);
             let material = observe_material_or_warn(&config.local_workspace, None);
             let result = self.authority.attach(AttachRequest {
                 session_id,
@@ -455,6 +445,24 @@ impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
             self.refresh_workspace_state(input.thread_store, "turn_start", true);
         })
     }
+}
+
+fn work_start_identity(
+    session_source: &SessionSource,
+    fallback_objective: &str,
+) -> (Option<SessionId>, String) {
+    let parent_session_id = session_source
+        .parent_thread_id()
+        .map(|thread_id| SessionId::from(thread_id.to_string()));
+    let objective = if parent_session_id.is_some() {
+        session_source
+            .get_agent_path()
+            .map(|path| path.to_string())
+            .unwrap_or_else(|| fallback_objective.to_owned())
+    } else {
+        fallback_objective.to_owned()
+    };
+    (parent_session_id, objective)
 }
 
 fn observe_material_or_warn(
