@@ -1,6 +1,7 @@
 param(
     [switch]$BuildBinaries,
-    [string]$CargoTargetDir
+    [string]$CargoTargetDir,
+    [string]$ValidationTargetDir
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,11 @@ if (-not $CargoTargetDir) {
     $CargoTargetDir = Join-Path $factoryRoot '.cargo-target'
 }
 $CargoTargetDir = [IO.Path]::GetFullPath($CargoTargetDir)
+
+if (-not $ValidationTargetDir) {
+    $ValidationTargetDir = Join-Path $factoryRoot '.cargo-target-r3-validation'
+}
+$ValidationTargetDir = [IO.Path]::GetFullPath($ValidationTargetDir)
 
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     throw 'cargo is not available on PATH.'
@@ -33,7 +39,8 @@ function Invoke-CargoStep {
 }
 
 function Show-FreeDisk {
-    $driveName = [IO.Path]::GetPathRoot($CargoTargetDir).TrimEnd('\').TrimEnd(':')
+    param([string]$TargetDir)
+    $driveName = [IO.Path]::GetPathRoot($TargetDir).TrimEnd('\').TrimEnd(':')
     $drive = Get-PSDrive $driveName
     Write-Host ("Free disk: {0:N2} GB" -f ($drive.Free / 1GB))
 }
@@ -44,10 +51,11 @@ Write-Host "BrineCDX R3 WorkGraph validation"
 Write-Host "Repo:   $repoRoot"
 Write-Host "Branch: $branch"
 Write-Host "HEAD:   $head"
-Write-Host "Target: $CargoTargetDir"
-Show-FreeDisk
+Write-Host "Validation target: $ValidationTargetDir"
+Write-Host "Binary target:     $CargoTargetDir"
+Show-FreeDisk -TargetDir $ValidationTargetDir
 
-$env:CARGO_TARGET_DIR = $CargoTargetDir
+$env:CARGO_TARGET_DIR = $ValidationTargetDir
 $env:CARGO_INCREMENTAL = '0'
 
 Push-Location $codexRs
@@ -98,6 +106,8 @@ try {
             throw 'Ports 4545/4222 are still in use. Exit active BrineCDX before rebuilding R3 runtime binaries.'
         }
 
+        $env:CARGO_TARGET_DIR = $CargoTargetDir
+
         Invoke-CargoStep 'R3 runtime-server build' @(
             'build',
             '-p', 'codex-brine-runtime',
@@ -129,7 +139,7 @@ finally {
     Pop-Location
 }
 
-Show-FreeDisk
+Show-FreeDisk -TargetDir $env:CARGO_TARGET_DIR
 Write-Host ""
 Write-Host 'R3 focused validation PASS.'
 if (-not $BuildBinaries) {
