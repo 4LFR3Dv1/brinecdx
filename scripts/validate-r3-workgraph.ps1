@@ -55,12 +55,15 @@ try {
     Invoke-CargoStep 'brine-runtime WorkGraph tests' @(
         'test',
         '-p', 'codex-brine-runtime',
+        '--lib',
+        '--tests',
         '-j', '2'
     )
 
     Invoke-CargoStep 'brine-runtime-extension lifecycle tests' @(
         'test',
         '-p', 'codex-brine-runtime-extension',
+        '--lib',
         '-j', '2'
     )
 
