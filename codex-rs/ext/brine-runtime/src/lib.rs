@@ -185,7 +185,9 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             let Some(config) = (self.config)(input.config) else {
                 return;
             };
-            let session_id = SessionId::from(input.session_store.level_id());
+            // Codex session_store is tree-scoped: subagents share the root session_id.
+            // Brine Work bindings are thread-scoped, so use the concrete thread identity.
+            let session_id = runtime_session_id(input.thread_store);
             let (parent_session_id, objective) =
                 work_start_identity(input.session_source, &config.objective);
             let material = observe_material_or_warn(&config.local_workspace, None);
@@ -445,6 +447,10 @@ impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
             self.refresh_workspace_state(input.thread_store, "turn_start", true);
         })
     }
+}
+
+fn runtime_session_id(thread_store: &codex_extension_api::ExtensionData) -> SessionId {
+    SessionId::from(thread_store.level_id())
 }
 
 fn work_start_identity(
