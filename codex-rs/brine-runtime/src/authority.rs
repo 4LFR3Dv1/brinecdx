@@ -299,10 +299,6 @@ impl PersistedRuntimeState {
                 work.assigned_thread = Some(request.session_id.clone());
                 work_transition = true;
             }
-            if work.status != WorkStatus::Active {
-                work.status = WorkStatus::Active;
-                work_transition = true;
-            }
             if work.objective.is_empty() && !request.objective.is_empty() {
                 work.objective = request.objective.clone();
                 work_transition = true;
