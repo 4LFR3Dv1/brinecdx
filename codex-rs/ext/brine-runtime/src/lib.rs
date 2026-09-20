@@ -261,6 +261,20 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             let Some(current) = input.thread_store.get::<AttachedRuntime>() else {
                 return;
             };
+            if let Some(goal) = (self.goal_resolver)(current.remote.session_id.clone()).await {
+                let objective = (goal.objective != current.state.work.objective)
+                    .then_some(goal.objective);
+                let status = (goal.status != current.state.work.status).then_some(goal.status);
+                if objective.is_some() || status.is_some() {
+                    self.update_work_state(
+                        input.thread_store,
+                        objective,
+                        status,
+                        "thread_idle_goal",
+                    );
+                }
+                return;
+            }
             if current.state.work.parent_work.is_none() {
                 return;
             }
