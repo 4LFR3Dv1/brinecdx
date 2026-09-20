@@ -124,21 +124,25 @@ function Attach-Work {
     param(
         [string]$SessionId,
         [string]$Objective,
-        [string]$ParentSessionId = $null,
+        [string]$ParentSessionId,
         $SinceRevision = $null
     )
 
-    Invoke-BrineRuntime 'Attach' @{
+    $payload = @{
         session_id = $SessionId
         workspace_key = 'witness:r3-workgraph'
         workspace_aliases = @()
         repository_identity = 'witness:r3-workgraph'
         work_key = ''
         objective = $Objective
-        parent_session_id = $ParentSessionId
         since_revision = $SinceRevision
         material = $null
     }
+    if (-not [string]::IsNullOrWhiteSpace($ParentSessionId)) {
+        $payload.parent_session_id = $ParentSessionId
+    }
+
+    Invoke-BrineRuntime 'Attach' $payload
 }
 
 function Update-Work {
