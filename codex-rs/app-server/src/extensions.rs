@@ -384,6 +384,29 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn brine_work_status_preserves_goal_terminal_semantics() {
+        assert_eq!(
+            brine_work_status_from_goal_status(ThreadGoalStatus::Active),
+            WorkStatus::Active
+        );
+        assert_eq!(
+            brine_work_status_from_goal_status(ThreadGoalStatus::Complete),
+            WorkStatus::Complete
+        );
+        for status in [
+            ThreadGoalStatus::Paused,
+            ThreadGoalStatus::Blocked,
+            ThreadGoalStatus::UsageLimited,
+            ThreadGoalStatus::BudgetLimited,
+        ] {
+            assert_eq!(
+                brine_work_status_from_goal_status(status),
+                WorkStatus::Paused
+            );
+        }
+    }
+
     #[tokio::test]
     async fn app_server_event_sink_uses_listener_fifo_for_goal_updates_warnings_and_clears() {
         let (outgoing_tx, _outgoing_rx) = mpsc::channel(4);
