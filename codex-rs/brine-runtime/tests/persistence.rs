@@ -90,6 +90,74 @@ fn authority_survives_session_and_replays_remote_delta() {
 
 
 
+
+#[test]
+fn r2_runtime_state_migrates_into_r3_workgraph_defaults() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("runtime.json");
+
+    let legacy_workspace_id = "workspace-r2";
+    let legacy_work_id = "work-r2";
+    let legacy_state = serde_json::json!({
+        "revision": 6,
+        "workspaces": {
+            legacy_workspace_id: {
+                "id": legacy_workspace_id,
+                "key": "local-git:r2",
+                "repository_identity": "origin-sha256:r2",
+                "created_revision": 1
+            }
+        },
+        "works": {
+            legacy_work_id: {
+                "id": legacy_work_id,
+                "workspace_id": legacy_workspace_id,
+                "key": "root",
+                "objective": "R2 durable work",
+                "created_revision": 2,
+                "last_revision": 6
+            }
+        },
+        "attachments": {},
+        "deltas": [],
+        "workspace_material": {},
+        "workspace_revisions": []
+    });
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&legacy_state).expect("serialize legacy R2 state"),
+    )
+    .expect("write legacy R2 state");
+
+    let authority = FileRuntimeAuthority::open(&path).expect("open R2 state with R3 authority");
+    let attached = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("r3-session"),
+            workspace_key: "local-git:r2".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "origin-sha256:r2".to_owned(),
+            work_key: String::new(),
+            objective: "R2 durable work".to_owned(),
+            parent_session_id: None,
+            since_revision: Some(6),
+            material: None,
+        })
+        .expect("attach R3 session to migrated R2 state");
+
+    assert_eq!(attached.state.workspace.id.as_str(), legacy_workspace_id);
+    assert_eq!(attached.state.work.id.as_str(), legacy_work_id);
+    assert!(attached.state.work.parent_work.is_none());
+    assert_eq!(attached.state.work.status, WorkStatus::Active);
+    assert_eq!(
+        attached.state.work.assigned_thread.as_ref(),
+        Some(&SessionId::from("r3-session"))
+    );
+    assert!(attached.state.work.candidate.is_none());
+    let graph = attached.state.work_graph.as_ref().expect("work graph");
+    assert_eq!(graph.nodes.len(), 1);
+    assert_eq!(graph.nodes[0].id.as_str(), legacy_work_id);
+}
+
 #[test]
 fn work_graph_binds_child_work_and_survives_detach_and_reattach() {
     let directory = tempdir().expect("temp directory");
@@ -177,11 +245,22 @@ fn work_graph_binds_child_work_and_survives_detach_and_reattach() {
         .expect("reattach child by durable thread binding");
 
     assert_eq!(rebound.attachment.work_id, child.attachment.work_id);
-    assert_eq!(rebound.state.work.status, WorkStatus::Active);
+    assert_eq!(rebound.state.work.status, WorkStatus::Complete);
     assert_eq!(
         rebound.state.work.parent_work.as_ref(),
         Some(&root.attachment.work_id)
     );
+
+    let resumed = reopened
+        .update_work(UpdateWorkRequest {
+            session_id: child_session,
+            objective: None,
+            status: Some(WorkStatus::Active),
+            since_revision: Some(rebound.state.revision),
+        })
+        .expect("reactivate child on new work");
+    assert_eq!(resumed.attachment.work_id, child.attachment.work_id);
+    assert_eq!(resumed.state.work.status, WorkStatus::Active);
 }
 
 #[test]
