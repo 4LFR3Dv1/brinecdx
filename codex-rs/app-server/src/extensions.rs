@@ -10,7 +10,9 @@ use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_app_server_protocol::WarningNotification;
 use codex_brine_runtime::TcpRuntimeAuthority;
+use codex_brine_runtime::WorkStatus;
 use codex_brine_runtime_extension::LocalWorkspace;
+use codex_brine_runtime_extension::WorkGoalState;
 use codex_brine_runtime_extension::identify_local_workspace;
 use codex_brine_runtime_extension::SessionAttachmentConfig;
 use codex_core::ThreadManager;
@@ -76,7 +78,7 @@ pub(crate) fn thread_extensions(
     if let Some(address) = brine_runtime_authority_address() {
         let brine_goal_service = goal_service.clone();
         let brine_state_db = state_db.clone();
-        codex_brine_runtime_extension::install_with_objective_resolver(
+        codex_brine_runtime_extension::install_with_goal_resolver(
             &mut builder,
             Arc::new(TcpRuntimeAuthority::new(address)),
             |config: &Config| {
@@ -105,7 +107,10 @@ pub(crate) fn thread_extensions(
                         .await
                         .ok()
                         .flatten()
-                        .map(|goal| goal.objective)
+                        .map(|goal| WorkGoalState {
+                            objective: goal.objective,
+                            status: brine_work_status_from_goal_status(goal.status),
+                        })
                 })
             }),
         );
@@ -163,6 +168,17 @@ pub(crate) fn thread_extensions(
         },
     );
     Arc::new(builder.build())
+}
+
+fn brine_work_status_from_goal_status(status: ThreadGoalStatus) -> WorkStatus {
+    match status {
+        ThreadGoalStatus::Active => WorkStatus::Active,
+        ThreadGoalStatus::Complete => WorkStatus::Complete,
+        ThreadGoalStatus::Paused
+        | ThreadGoalStatus::Blocked
+        | ThreadGoalStatus::UsageLimited
+        | ThreadGoalStatus::BudgetLimited => WorkStatus::Paused,
+    }
 }
 
 fn brine_runtime_authority_address() -> Option<SocketAddr> {
