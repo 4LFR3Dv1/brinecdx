@@ -3,12 +3,46 @@ use std::sync::Arc;
 use std::thread;
 
 use codex_brine_runtime::AttachRequest;
+use codex_brine_runtime::AttachmentSnapshot;
 use codex_brine_runtime::FileRuntimeAuthority;
 use codex_brine_runtime::ReconcileRequest;
 use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::RuntimeAuthorityServer;
 use codex_brine_runtime::SessionId;
 use codex_brine_runtime::TcpRuntimeAuthority;
+
+
+#[test]
+fn r2_client_rejects_legacy_attachment_snapshot_without_protocol_version() {
+    let legacy_snapshot = serde_json::json!({
+        "attachment": {
+            "session_id": "legacy-session",
+            "workspace_id": "legacy-workspace",
+            "work_id": "legacy-work",
+            "attached_revision": 2
+        },
+        "state": {
+            "revision": 2,
+            "workspace": {
+                "id": "legacy-workspace",
+                "key": "legacy",
+                "repository_identity": "legacy",
+                "created_revision": 1
+            },
+            "work": {
+                "id": "legacy-work",
+                "workspace_id": "legacy-workspace",
+                "key": "root",
+                "objective": "legacy work",
+                "created_revision": 2,
+                "last_revision": 2
+            },
+            "pending_deltas": []
+        }
+    });
+
+    assert!(serde_json::from_value::<AttachmentSnapshot>(legacy_snapshot).is_err());
+}
 
 #[test]
 fn remote_authority_survives_the_codex_session_boundary() {
@@ -27,10 +61,12 @@ fn remote_authority_survives_the_codex_session_boundary() {
             .attach(AttachRequest {
                 session_id: SessionId::from("codex-session-1"),
                 workspace_key: "repo:brinecdx".to_owned(),
+            workspace_aliases: Vec::new(),
                 repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
                 work_key: String::new(),
                 objective: "implement R1".to_owned(),
                 since_revision: None,
+                material: None,
             })
             .expect("attach first session");
         let first_revision = first.state.revision;
@@ -60,11 +96,13 @@ fn remote_authority_survives_the_codex_session_boundary() {
     let second = third_client
         .attach(AttachRequest {
             session_id: SessionId::from("codex-session-2"),
-            workspace_key: "repo:brinecdx".to_owned(),
+                workspace_key: "repo:brinecdx".to_owned(),
+                workspace_aliases: Vec::new(),
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
             work_key: String::new(),
             objective: "implement R1".to_owned(),
             since_revision: Some(first_revision),
+            material: None,
         })
         .expect("attach second session");
     assert_eq!(
@@ -81,6 +119,7 @@ fn remote_authority_survives_the_codex_session_boundary() {
             workspace_id: second.attachment.workspace_id,
             work_id: second.attachment.work_id,
             since_revision: Some(second.state.revision),
+            material: None,
         })
         .expect("reconcile second session");
 

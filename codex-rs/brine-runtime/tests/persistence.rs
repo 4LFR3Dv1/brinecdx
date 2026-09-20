@@ -1,8 +1,12 @@
+use std::collections::BTreeMap;
+
 use codex_brine_runtime::AttachRequest;
 use codex_brine_runtime::FileRuntimeAuthority;
 use codex_brine_runtime::ReconcileRequest;
 use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::SessionId;
+use codex_brine_runtime::WorkspaceMaterialObservation;
+use codex_brine_runtime::WorkspaceStructureObservation;
 use tempfile::tempdir;
 
 #[test]
@@ -14,10 +18,12 @@ fn authority_survives_session_and_replays_remote_delta() {
         .attach(AttachRequest {
             session_id: SessionId::from("codex-session-1"),
             workspace_key: "repo:brinecdx".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
             work_key: "work:runtime-reset".to_owned(),
             objective: "implement R1".to_owned(),
             since_revision: None,
+            material: None,
         })
         .expect("attach first session");
     let first_revision = first.state.revision;
@@ -46,10 +52,12 @@ fn authority_survives_session_and_replays_remote_delta() {
         .attach(AttachRequest {
             session_id: SessionId::from("codex-session-2"),
             workspace_key: "repo:brinecdx".to_owned(),
+            workspace_aliases: Vec::new(),
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
             work_key: "work:runtime-reset".to_owned(),
             objective: "implement R1".to_owned(),
             since_revision: Some(first_revision),
+            material: None,
         })
         .expect("attach second session");
 
@@ -70,7 +78,294 @@ fn authority_survives_session_and_replays_remote_delta() {
             workspace_id: second.attachment.workspace_id.clone(),
             work_id: second.attachment.work_id.clone(),
             since_revision: Some(second.state.revision),
+            material: None,
         })
         .expect("reconcile second session");
     assert!(reconciled.state.pending_deltas.is_empty());
+}
+
+
+#[test]
+fn workspace_alias_migrates_r1_identity_without_forking_work() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("runtime.json");
+    let authority = FileRuntimeAuthority::open(&path).expect("open authority");
+
+    let legacy_key = "local:legacy-cwd-hash";
+    let first = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("legacy-session"),
+            workspace_key: legacy_key.to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: legacy_key.to_owned(),
+            work_key: String::new(),
+            objective: "persistent root work".to_owned(),
+            since_revision: None,
+            material: None,
+        })
+        .expect("attach legacy workspace");
+
+    let migrated = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("migrated-session"),
+            workspace_key: "local-git:new-common-dir-hash".to_owned(),
+            workspace_aliases: vec![legacy_key.to_owned()],
+            repository_identity: "origin-sha256:repo".to_owned(),
+            work_key: String::new(),
+            objective: "persistent root work".to_owned(),
+            since_revision: Some(first.state.revision),
+            material: None,
+        })
+        .expect("attach migrated workspace");
+
+    assert_eq!(
+        migrated.attachment.workspace_id,
+        first.attachment.workspace_id
+    );
+    assert_eq!(migrated.attachment.work_id, first.attachment.work_id);
+    assert_eq!(
+        migrated.state.workspace.key,
+        "local-git:new-common-dir-hash"
+    );
+    assert_eq!(
+        migrated.state.workspace.repository_identity,
+        "origin-sha256:repo"
+    );
+
+    let persisted: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(path).expect("read persisted runtime"),
+    )
+    .expect("parse persisted runtime");
+    assert_eq!(
+        persisted["workspaces"]
+            .as_object()
+            .expect("workspace map")
+            .len(),
+        1
+    );
+    assert_eq!(
+        persisted["works"].as_object().expect("work map").len(),
+        1
+    );
+}
+
+#[test]
+fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("runtime.json");
+    let authority = FileRuntimeAuthority::open(&path).expect("open authority");
+
+    let first = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("material-session-1"),
+            workspace_key: "repo:material".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:material".to_owned(),
+            work_key: String::new(),
+            objective: "observe material".to_owned(),
+            since_revision: None,
+            material: Some(material_observation("head-a", "digest-a", "src/lib.rs")),
+        })
+        .expect("attach first material snapshot");
+    let first_material = first
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("material state should exist");
+    assert_eq!(first_material.material_revision, 1);
+    assert_eq!(first.state.revision, 3);
+
+    let same = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("material-session-2"),
+            workspace_key: "repo:material".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:material".to_owned(),
+            work_key: String::new(),
+            objective: "observe material".to_owned(),
+            since_revision: Some(first.state.revision),
+            material: Some(material_observation("head-a", "digest-a", "src/lib.rs")),
+        })
+        .expect("attach identical material snapshot");
+    assert_eq!(same.state.revision, first.state.revision);
+    assert_eq!(
+        same.state
+            .workspace_material
+            .as_ref()
+            .expect("material state should exist")
+            .material_revision,
+        1
+    );
+
+    let changed = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("material-session-3"),
+            workspace_key: "repo:material".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:material".to_owned(),
+            work_key: String::new(),
+            objective: "observe material".to_owned(),
+            since_revision: Some(same.state.revision),
+            material: Some(material_observation("head-a", "digest-b", "src/lib.rs")),
+        })
+        .expect("attach changed material snapshot");
+    assert_eq!(changed.state.revision, first.state.revision + 1);
+    let changed_material = changed
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("changed material state should exist");
+    assert_eq!(changed_material.material_revision, 2);
+    assert_eq!(changed_material.runtime_revision, changed.state.revision);
+
+    drop(authority);
+
+    let reopened = FileRuntimeAuthority::open(&path).expect("reopen authority");
+    let stable = reopened
+        .attach(AttachRequest {
+            session_id: SessionId::from("material-session-4"),
+            workspace_key: "repo:material".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:material".to_owned(),
+            work_key: String::new(),
+            objective: "observe material".to_owned(),
+            since_revision: Some(changed.state.revision),
+            material: Some(material_observation("head-a", "digest-b", "src/lib.rs")),
+        })
+        .expect("reattach same material after restart");
+    assert_eq!(stable.state.revision, changed.state.revision);
+    assert_eq!(
+        stable
+            .state
+            .workspace_material
+            .as_ref()
+            .expect("material state should survive restart")
+            .material_revision,
+        2
+    );
+
+    let persisted: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&path).expect("read persisted runtime"),
+    )
+    .expect("parse persisted runtime");
+    assert_eq!(
+        persisted["workspace_revisions"]
+            .as_array()
+            .expect("workspace revision history")
+            .len(),
+        2
+    );
+}
+
+
+#[test]
+fn structural_revision_advances_only_when_structure_changes() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("runtime.json");
+    let authority = FileRuntimeAuthority::open(&path).expect("open authority");
+
+    let first = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("structure-session-1"),
+            workspace_key: "repo:structure".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:structure".to_owned(),
+            work_key: String::new(),
+            objective: "observe structure".to_owned(),
+            since_revision: None,
+            material: Some(material_observation_with_structure(
+                "head-a",
+                "material-a",
+                "structure-a",
+                "src/lib.rs",
+            )),
+        })
+        .expect("attach first structural snapshot");
+    let first_state = first
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("workspace material");
+    assert_eq!(first_state.material_revision, 1);
+    assert_eq!(first_state.structural_revision, 1);
+
+    let material_only = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("structure-session-2"),
+            workspace_key: "repo:structure".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:structure".to_owned(),
+            work_key: String::new(),
+            objective: "observe structure".to_owned(),
+            since_revision: Some(first.state.revision),
+            material: Some(material_observation_with_structure(
+                "head-a",
+                "material-b",
+                "structure-a",
+                "src/lib.rs",
+            )),
+        })
+        .expect("attach material-only change");
+    let material_only_state = material_only
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("workspace material");
+    assert_eq!(material_only_state.material_revision, 2);
+    assert_eq!(material_only_state.structural_revision, 1);
+
+    let structural = authority
+        .attach(AttachRequest {
+            session_id: SessionId::from("structure-session-3"),
+            workspace_key: "repo:structure".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:structure".to_owned(),
+            work_key: String::new(),
+            objective: "observe structure".to_owned(),
+            since_revision: Some(material_only.state.revision),
+            material: Some(material_observation_with_structure(
+                "head-a",
+                "material-c",
+                "structure-b",
+                "src/lib.rs",
+            )),
+        })
+        .expect("attach structural change");
+    let structural_state = structural
+        .state
+        .workspace_material
+        .as_ref()
+        .expect("workspace material");
+    assert_eq!(structural_state.material_revision, 3);
+    assert_eq!(structural_state.structural_revision, 2);
+}
+
+
+fn material_observation_with_structure(
+    head: &str,
+    material_digest: &str,
+    structure_digest: &str,
+    changed_path: &str,
+) -> WorkspaceMaterialObservation {
+    let mut observation = material_observation(head, material_digest, changed_path);
+    observation.structure.digest = structure_digest.to_owned();
+    observation
+}
+
+fn material_observation(
+    head: &str,
+    material_digest: &str,
+    changed_path: &str,
+) -> WorkspaceMaterialObservation {
+    let mut file_digests = BTreeMap::new();
+    file_digests.insert(changed_path.to_owned(), format!("file:{material_digest}"));
+    WorkspaceMaterialObservation {
+        head: Some(head.to_owned()),
+        index_state: format!("index:{material_digest}"),
+        working_tree: format!("worktree:{material_digest}"),
+        changed_paths: vec![changed_path.to_owned()],
+        file_digests,
+        material_digest: material_digest.to_owned(),
+        structure: WorkspaceStructureObservation::default(),
+    }
 }

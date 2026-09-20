@@ -1,7 +1,10 @@
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::Deserialize;
 use serde::Serialize;
+
+pub const RUNTIME_PROTOCOL_VERSION: u32 = 2;
 
 macro_rules! id_type {
     ($name:ident) => {
@@ -74,6 +77,65 @@ pub struct RemoteDelta {
     pub summary: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceStructureObservation {
+    pub digest: String,
+    pub symbols: Vec<StructuralSymbol>,
+    pub unresolved_relations: Vec<UnresolvedStructuralRelation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StructuralSymbol {
+    pub path: String,
+    pub name: String,
+    pub kind: String,
+    pub line: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UnresolvedStructuralRelation {
+    pub path: String,
+    pub kind: String,
+    pub target: String,
+    pub line: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceMaterialObservation {
+    pub head: Option<String>,
+    pub index_state: String,
+    pub working_tree: String,
+    pub changed_paths: Vec<String>,
+    pub file_digests: BTreeMap<String, String>,
+    pub material_digest: String,
+    #[serde(default)]
+    pub structure: WorkspaceStructureObservation,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceMaterialState {
+    pub workspace_id: WorkspaceId,
+    pub material_revision: u64,
+    #[serde(default)]
+    pub structural_revision: u64,
+    pub runtime_revision: u64,
+    pub observation: WorkspaceMaterialObservation,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceRevisionRecord {
+    pub workspace_id: WorkspaceId,
+    pub material_revision: u64,
+    #[serde(default)]
+    pub structural_revision: u64,
+    pub runtime_revision: u64,
+    pub material_digest: String,
+    #[serde(default)]
+    pub structure_digest: String,
+    pub head: Option<String>,
+    pub changed_paths: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionAttachment {
     pub session_id: SessionId,
@@ -87,6 +149,8 @@ pub struct RuntimeState {
     pub revision: u64,
     pub workspace: WorkspaceRecord,
     pub work: WorkRecord,
+    #[serde(default)]
+    pub workspace_material: Option<WorkspaceMaterialState>,
     pub pending_deltas: Vec<RemoteDelta>,
 }
 
@@ -94,10 +158,14 @@ pub struct RuntimeState {
 pub struct AttachRequest {
     pub session_id: SessionId,
     pub workspace_key: String,
+    #[serde(default)]
+    pub workspace_aliases: Vec<String>,
     pub repository_identity: String,
     pub work_key: String,
     pub objective: String,
     pub since_revision: Option<u64>,
+    #[serde(default)]
+    pub material: Option<WorkspaceMaterialObservation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -106,10 +174,13 @@ pub struct ReconcileRequest {
     pub workspace_id: WorkspaceId,
     pub work_id: WorkId,
     pub since_revision: Option<u64>,
+    #[serde(default)]
+    pub material: Option<WorkspaceMaterialObservation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AttachmentSnapshot {
+    pub protocol_version: u32,
     pub attachment: SessionAttachment,
     pub state: RuntimeState,
 }

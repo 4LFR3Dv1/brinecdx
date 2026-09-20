@@ -4,8 +4,14 @@
 //! The local workspace root stays in the host thread store and is never sent to
 //! the authority or exposed as model-visible context.
 
+mod structure;
+mod workspace;
+
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 
 use codex_brine_runtime::AttachRequest;
 use codex_brine_runtime::AttachmentSnapshot;
@@ -13,14 +19,28 @@ use codex_brine_runtime::ReconcileRequest;
 use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::RuntimeAuthorityError;
 use codex_brine_runtime::RuntimeState;
+use codex_brine_runtime::RUNTIME_PROTOCOL_VERSION;
 use codex_brine_runtime::SessionAttachment;
 use codex_brine_runtime::SessionId;
+use codex_extension_api::CommandStartInput;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
+use codex_extension_api::ToolCallOutcome;
+use codex_extension_api::ToolFinishInput;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolStartInput;
+use codex_extension_api::TurnLifecycleContributor;
+use codex_extension_api::TurnStartInput;
+
+pub use workspace::WorkspaceIdentity;
+pub use workspace::identify_local_workspace;
+pub use workspace::observe_local_workspace;
+use workspace::observe_local_workspace_with_previous;
 
 /// Local physical reality owned by the Codex host.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +56,8 @@ pub struct LocalWorkspace {
 pub struct SessionAttachmentConfig {
     /// Stable logical workspace key understood by the remote authority.
     pub workspace_key: String,
+    /// Legacy workspace keys that may be migrated to workspace_key.
+    pub workspace_aliases: Vec<String>,
     /// Repository identity observed by the local host.
     pub repository_identity: String,
     /// Stable logical work key. Empty selects the workspace's persistent root Work.
@@ -94,7 +116,31 @@ pub fn install<C: Sync + 'static>(
     authority: Arc<dyn RuntimeAuthority>,
     config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
 ) {
-    builder.thread_lifecycle_contributor(Arc::new(BrineRuntimeExtension::new(authority, config)));
+    let extension = Arc::new(BrineRuntimeExtension::new(authority, config));
+    builder.thread_lifecycle_contributor(extension.clone());
+    builder.turn_lifecycle_contributor(extension.clone());
+    builder.tool_lifecycle_contributor(extension);
+}
+
+#[derive(Debug, Default)]
+struct PotentialMutationCalls {
+    call_ids: Mutex<HashSet<String>>,
+}
+
+impl PotentialMutationCalls {
+    fn insert(&self, call_id: &str) {
+        self.call_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(call_id.to_owned());
+    }
+
+    fn remove(&self, call_id: &str) -> bool {
+        self.call_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(call_id)
+    }
 }
 
 impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
@@ -104,16 +150,22 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 return;
             };
             let session_id = SessionId::from(input.session_store.level_id());
+            let material = observe_material_or_warn(&config.local_workspace, None);
             let result = self.authority.attach(AttachRequest {
                 session_id,
                 workspace_key: config.workspace_key,
+                workspace_aliases: config.workspace_aliases,
                 repository_identity: config.repository_identity.clone(),
                 work_key: config.work_key,
                 objective: config.objective,
                 since_revision: None,
+                material,
             });
             match result {
                 Ok(snapshot) => {
+                    if !snapshot_protocol_compatible("attach", &snapshot) {
+                        return;
+                    }
                     let attached = attached_runtime(snapshot, config.local_workspace);
                     log_attachment_success("attach", &attached);
                     input.thread_store.insert(attached);
@@ -128,14 +180,24 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             let Some(current) = input.thread_store.get::<AttachedRuntime>() else {
                 return;
             };
+            let previous = current
+                .state
+                .workspace_material
+                .as_ref()
+                .map(|state| &state.observation);
+            let material = observe_material_or_warn(&current.local_workspace, previous);
             let result = self.authority.reconcile(ReconcileRequest {
                 session_id: current.remote.session_id.clone(),
                 workspace_id: current.remote.workspace_id.clone(),
                 work_id: current.remote.work_id.clone(),
                 since_revision: Some(current.remote.attached_revision),
+                material,
             });
             match result {
                 Ok(snapshot) => {
+                    if !snapshot_protocol_compatible("reconcile", &snapshot) {
+                        return;
+                    }
                     let attached = attached_runtime(snapshot, current.local_workspace.clone());
                     log_attachment_success("reconcile", &attached);
                     input.thread_store.insert(attached);
@@ -155,6 +217,142 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             }
         })
     }
+}
+
+impl<C: Sync> ToolLifecycleContributor for BrineRuntimeExtension<C> {
+    fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            if matches!(
+                input.tool_name.name.as_str(),
+                "apply_patch" | "write_file" | "edit_file"
+            ) {
+                input
+                    .thread_store
+                    .get_or_init(PotentialMutationCalls::default)
+                    .insert(input.call_id);
+            }
+        })
+    }
+
+    fn on_command_start<'a>(&'a self, input: CommandStartInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            input
+                .thread_store
+                .get_or_init(PotentialMutationCalls::default)
+                .insert(input.call_id);
+        })
+    }
+
+    fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            let Some(calls) = input.thread_store.get::<PotentialMutationCalls>() else {
+                return;
+            };
+            if !calls.remove(input.call_id) || !outcome_may_have_mutated(input.outcome) {
+                return;
+            }
+            self.refresh_workspace_state(input.thread_store, "tool_finish", false);
+        })
+    }
+}
+
+impl<C: Sync> BrineRuntimeExtension<C> {
+    fn refresh_workspace_state(
+        &self,
+        thread_store: &codex_extension_api::ExtensionData,
+        operation: &str,
+        reconcile_when_unchanged: bool,
+    ) {
+        let Some(current) = thread_store.get::<AttachedRuntime>() else {
+            return;
+        };
+        let previous = current
+            .state
+            .workspace_material
+            .as_ref()
+            .map(|state| &state.observation);
+        let Some(material) = observe_material_or_warn(&current.local_workspace, previous) else {
+            return;
+        };
+        if !reconcile_when_unchanged
+            && current
+                .state
+                .workspace_material
+                .as_ref()
+                .is_some_and(|state| {
+                    state.observation.material_digest == material.material_digest
+                })
+        {
+            return;
+        }
+
+        let result = self.authority.reconcile(ReconcileRequest {
+            session_id: current.remote.session_id.clone(),
+            workspace_id: current.remote.workspace_id.clone(),
+            work_id: current.remote.work_id.clone(),
+            since_revision: Some(current.state.revision),
+            material: Some(material),
+        });
+        match result {
+            Ok(snapshot) => {
+                if !snapshot_protocol_compatible(operation, &snapshot) {
+                    return;
+                }
+                let attached = attached_runtime(snapshot, current.local_workspace.clone());
+                log_attachment_success(operation, &attached);
+                thread_store.insert(attached);
+            }
+            Err(error) => log_attachment_error(operation, error),
+        }
+    }
+}
+
+fn outcome_may_have_mutated(outcome: ToolCallOutcome) -> bool {
+    !matches!(
+        outcome,
+        ToolCallOutcome::Blocked
+            | ToolCallOutcome::Failed {
+                handler_executed: false
+            }
+    )
+}
+
+impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
+    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            self.refresh_workspace_state(input.thread_store, "turn_start", true);
+        })
+    }
+}
+
+fn observe_material_or_warn(
+    workspace: &LocalWorkspace,
+    previous: Option<&codex_brine_runtime::WorkspaceMaterialObservation>,
+) -> Option<codex_brine_runtime::WorkspaceMaterialObservation> {
+    match observe_local_workspace_with_previous(workspace, previous) {
+        Ok(material) => material,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                root = %workspace.root.display(),
+                "Brine workspace material observation failed"
+            );
+            None
+        }
+    }
+}
+
+fn snapshot_protocol_compatible(operation: &str, snapshot: &AttachmentSnapshot) -> bool {
+    if snapshot.protocol_version == RUNTIME_PROTOCOL_VERSION {
+        return true;
+    }
+    tracing::warn!(
+        operation,
+        expected = RUNTIME_PROTOCOL_VERSION,
+        actual = snapshot.protocol_version,
+        "Brine runtime protocol version mismatch; attachment rejected"
+    );
+    false
 }
 
 fn attached_runtime(

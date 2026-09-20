@@ -14,13 +14,17 @@ use crate::AttachRequest;
 use crate::AttachmentSnapshot;
 use crate::ReconcileRequest;
 use crate::RemoteDelta;
+use crate::RUNTIME_PROTOCOL_VERSION;
 use crate::RuntimeState;
 use crate::SessionAttachment;
 use crate::SessionId;
 use crate::WorkId;
 use crate::WorkRecord;
 use crate::WorkspaceId;
+use crate::WorkspaceMaterialObservation;
+use crate::WorkspaceMaterialState;
 use crate::WorkspaceRecord;
+use crate::WorkspaceRevisionRecord;
 
 const ROOT_WORK_KEY: &str = "root";
 
@@ -84,6 +88,10 @@ struct PersistedRuntimeState {
     works: BTreeMap<String, WorkRecord>,
     attachments: BTreeMap<String, SessionAttachment>,
     deltas: Vec<RemoteDelta>,
+    #[serde(default)]
+    workspace_material: BTreeMap<String, WorkspaceMaterialState>,
+    #[serde(default)]
+    workspace_revisions: Vec<WorkspaceRevisionRecord>,
 }
 
 impl PersistedRuntimeState {
@@ -114,6 +122,7 @@ impl PersistedRuntimeState {
             revision: self.revision,
             workspace,
             work,
+            workspace_material: self.workspace_material.get(workspace_id.as_str()).cloned(),
             pending_deltas,
         })
     }
@@ -127,12 +136,46 @@ impl PersistedRuntimeState {
         } else {
             request.work_key.clone()
         };
-        let workspace_id = self
+        let exact_workspace_id = self
             .workspaces
             .values()
             .find(|workspace| workspace.key == request.workspace_key)
-            .map(|workspace| workspace.id.clone())
-            .unwrap_or_else(|| {
+            .map(|workspace| workspace.id.clone());
+        let aliased_workspace_id = if exact_workspace_id.is_none() {
+            self.workspaces
+                .values()
+                .find(|workspace| {
+                    request
+                        .workspace_aliases
+                        .iter()
+                        .any(|alias| alias == &workspace.key)
+                })
+                .map(|workspace| workspace.id.clone())
+        } else {
+            None
+        };
+
+        let workspace_id = match exact_workspace_id.or(aliased_workspace_id) {
+            Some(id) => {
+                let needs_identity_update = self
+                    .workspaces
+                    .get(id.as_str())
+                    .is_some_and(|workspace| {
+                        workspace.key != request.workspace_key
+                            || workspace.repository_identity != request.repository_identity
+                    });
+                if needs_identity_update {
+                    self.revision += 1;
+                    let workspace = self
+                        .workspaces
+                        .get_mut(id.as_str())
+                        .expect("resolved workspace must remain present");
+                    workspace.key = request.workspace_key.clone();
+                    workspace.repository_identity = request.repository_identity.clone();
+                }
+                id
+            }
+            None => {
                 let id = WorkspaceId::new();
                 self.revision += 1;
                 self.workspaces.insert(
@@ -145,7 +188,10 @@ impl PersistedRuntimeState {
                     },
                 );
                 id
-            });
+            }
+        };
+
+        self.apply_workspace_material(&workspace_id, request.material.as_ref());
 
         let work_id = self
             .works
@@ -178,6 +224,7 @@ impl PersistedRuntimeState {
         self.attachments
             .insert(request.session_id.to_string(), attachment.clone());
         Ok(AttachmentSnapshot {
+            protocol_version: RUNTIME_PROTOCOL_VERSION,
             state: self.snapshot(&workspace_id, &work_id, request.since_revision)?,
             attachment,
         })
@@ -187,22 +234,35 @@ impl PersistedRuntimeState {
         &mut self,
         request: &ReconcileRequest,
     ) -> Result<AttachmentSnapshot, RuntimeAuthorityError> {
-        let Some(attachment) = self.attachments.get_mut(request.session_id.as_str()) else {
+        let Some(existing_attachment) = self
+            .attachments
+            .get(request.session_id.as_str())
+            .cloned()
+        else {
             return Err(RuntimeAuthorityError::SessionNotAttached(
                 request.session_id.clone(),
                 request.work_id.clone(),
             ));
         };
-        if attachment.workspace_id != request.workspace_id || attachment.work_id != request.work_id
+        if existing_attachment.workspace_id != request.workspace_id
+            || existing_attachment.work_id != request.work_id
         {
             return Err(RuntimeAuthorityError::SessionNotAttached(
                 request.session_id.clone(),
                 request.work_id.clone(),
             ));
         }
+
+        self.apply_workspace_material(&request.workspace_id, request.material.as_ref());
+
+        let attachment = self
+            .attachments
+            .get_mut(request.session_id.as_str())
+            .expect("validated attachment remains present");
         attachment.attached_revision = self.revision;
         let attachment = attachment.clone();
         Ok(AttachmentSnapshot {
+            protocol_version: RUNTIME_PROTOCOL_VERSION,
             state: self.snapshot(
                 &request.workspace_id,
                 &request.work_id,
@@ -210,6 +270,64 @@ impl PersistedRuntimeState {
             )?,
             attachment,
         })
+    }
+
+    fn apply_workspace_material(
+        &mut self,
+        workspace_id: &WorkspaceId,
+        observation: Option<&WorkspaceMaterialObservation>,
+    ) {
+        let Some(observation) = observation else {
+            return;
+        };
+        if self
+            .workspace_material
+            .get(workspace_id.as_str())
+            .is_some_and(|state| state.observation.material_digest == observation.material_digest)
+        {
+            return;
+        }
+
+        let previous = self.workspace_material.get(workspace_id.as_str());
+        let material_revision = previous
+            .map(|state| state.material_revision + 1)
+            .unwrap_or(1);
+        let structure_digest = &observation.structure.digest;
+        let structural_revision = if structure_digest.is_empty() {
+            previous.map(|state| state.structural_revision).unwrap_or(0)
+        } else if previous.is_some_and(|state| {
+            state.observation.structure.digest == *structure_digest
+        }) {
+            previous
+                .map(|state| state.structural_revision.max(1))
+                .unwrap_or(1)
+        } else {
+            previous
+                .map(|state| state.structural_revision.saturating_add(1).max(1))
+                .unwrap_or(1)
+        };
+
+        self.revision += 1;
+        let runtime_revision = self.revision;
+        let material_state = WorkspaceMaterialState {
+            workspace_id: workspace_id.clone(),
+            material_revision,
+            structural_revision,
+            runtime_revision,
+            observation: observation.clone(),
+        };
+        self.workspace_material
+            .insert(workspace_id.to_string(), material_state);
+        self.workspace_revisions.push(WorkspaceRevisionRecord {
+            workspace_id: workspace_id.clone(),
+            material_revision,
+            structural_revision,
+            runtime_revision,
+            material_digest: observation.material_digest.clone(),
+            structure_digest: observation.structure.digest.clone(),
+            head: observation.head.clone(),
+            changed_paths: observation.changed_paths.clone(),
+        });
     }
 }
 
