@@ -31,7 +31,9 @@ $witnessRoot = Join-Path $HOME ".brinecdx\witness\r3-integrated-$stamp"
 $statePath = Join-Path $witnessRoot 'runtime.json'
 $summaryPath = Join-Path $witnessRoot 'summary.json'
 $logDir = Join-Path $witnessRoot 'logs'
+$sqliteHome = Join-Path $witnessRoot 'sqlite'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+New-Item -ItemType Directory -Force -Path $sqliteHome | Out-Null
 
 function Wait-Listener {
     param([int]$Port, [int]$Timeout = 10)
@@ -69,8 +71,10 @@ function Start-Runtime {
 }
 
 function Start-AppServer {
-    $previous = $env:BRINECDX_RUNTIME_AUTHORITY_ADDR
+    $previousRuntime = $env:BRINECDX_RUNTIME_AUTHORITY_ADDR
+    $previousSqliteHome = $env:CODEX_SQLITE_HOME
     $env:BRINECDX_RUNTIME_AUTHORITY_ADDR = "127.0.0.1:$RuntimePort"
+    $env:CODEX_SQLITE_HOME = $sqliteHome
     try {
         $args = @{
             FilePath = $appServerExe
@@ -84,10 +88,15 @@ function Start-AppServer {
         $process = Start-Process @args
     }
     finally {
-        if ($null -eq $previous) {
+        if ($null -eq $previousRuntime) {
             Remove-Item Env:BRINECDX_RUNTIME_AUTHORITY_ADDR -ErrorAction SilentlyContinue
         } else {
-            $env:BRINECDX_RUNTIME_AUTHORITY_ADDR = $previous
+            $env:BRINECDX_RUNTIME_AUTHORITY_ADDR = $previousRuntime
+        }
+        if ($null -eq $previousSqliteHome) {
+            Remove-Item Env:CODEX_SQLITE_HOME -ErrorAction SilentlyContinue
+        } else {
+            $env:CODEX_SQLITE_HOME = $previousSqliteHome
         }
     }
     Wait-Listener -Port $AppServerPort
@@ -285,7 +294,7 @@ try {
 
     $threadResponse = Invoke-WsRpc $socket 2 'thread/start' @{
         cwd = $WorkspaceRoot
-        ephemeral = $true
+        ephemeral = $false
     }
     $rootThreadId = [string]$threadResponse.result.thread.id
     $rootBinding = Wait-ThreadBinding -ThreadId $rootThreadId -Timeout 15
@@ -355,6 +364,7 @@ Do not spawn more than one child.
         created_at = (Get-Date).ToString('o')
         workspace_root = $WorkspaceRoot
         runtime_state = $statePath
+        codex_sqlite_home = $sqliteHome
         root_thread_id = $rootThreadId
         root_work_id = $rootWorkId
         workspace_id = $workspaceId
@@ -387,6 +397,7 @@ Do not spawn more than one child.
     Write-Host "Child Parent:    $($summary.child_parent_work)"
     Write-Host "Child Status:    $($summary.child_status)"
     Write-Host "Runtime Revision:$($summary.runtime_revision)"
+    Write-Host "SQLite Evidence: $sqliteHome"
     Write-Host "Evidence:        $summaryPath"
 }
 finally {
