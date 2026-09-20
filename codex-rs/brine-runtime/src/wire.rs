@@ -17,6 +17,7 @@ use crate::RuntimeAuthority;
 use crate::RuntimeAuthorityError;
 use crate::RuntimeState;
 use crate::SessionId;
+use crate::UpdateWorkRequest;
 use crate::WorkId;
 use crate::WorkspaceId;
 
@@ -30,6 +31,7 @@ enum RuntimeRequest {
         work_id: WorkId,
         since_revision: Option<u64>,
     },
+    UpdateWork(UpdateWorkRequest),
     Detach(SessionId),
     RecordRemoteDelta {
         work_id: WorkId,
@@ -102,6 +104,13 @@ impl RuntimeAuthority for TcpRuntimeAuthority {
             work_id: work_id.clone(),
             since_revision,
         })
+    }
+
+    fn update_work(
+        &self,
+        request: UpdateWorkRequest,
+    ) -> Result<AttachmentSnapshot, RuntimeAuthorityError> {
+        self.request(RuntimeRequest::UpdateWork(request))
     }
 
     fn detach(&self, session_id: &SessionId) -> Result<(), RuntimeAuthorityError> {
@@ -190,6 +199,7 @@ fn dispatch(
             work_id,
             since_revision,
         } => respond!(authority.state(&workspace_id, &work_id, since_revision)),
+        RuntimeRequest::UpdateWork(request) => respond!(authority.update_work(request)),
         RuntimeRequest::Detach(session_id) => respond!(authority.detach(&session_id)),
         RuntimeRequest::RecordRemoteDelta { work_id, summary } => {
             respond!(authority.record_remote_delta(&work_id, summary))
