@@ -36,13 +36,41 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 New-Item -ItemType Directory -Force -Path $sqliteHome | Out-Null
 
 function Wait-Listener {
-    param([int]$Port, [int]$Timeout = 10)
+    param(
+        [int]$Port,
+        [int]$Timeout = 10,
+        $Process = $null,
+        [string]$ErrorLog = $null
+    )
     $deadline = [DateTime]::UtcNow.AddSeconds($Timeout)
     while ([DateTime]::UtcNow -lt $deadline) {
         if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) { return }
+
+        if ($Process) {
+            $Process.Refresh()
+            if ($Process.HasExited) {
+                $details = ''
+                if ($ErrorLog -and (Test-Path $ErrorLog)) {
+                    $details = (Get-Content -LiteralPath $ErrorLog -Raw -ErrorAction SilentlyContinue).Trim()
+                }
+                if ($details) {
+                    throw "Process exited before listener on port $Port (exit=$($Process.ExitCode)). stderr: $details"
+                }
+                throw "Process exited before listener on port $Port (exit=$($Process.ExitCode))."
+            }
+        }
+
         Start-Sleep -Milliseconds 150
     }
-    throw "Timed out waiting for listener on port $Port."
+
+    $details = ''
+    if ($ErrorLog -and (Test-Path $ErrorLog)) {
+        $details = (Get-Content -LiteralPath $ErrorLog -Raw -ErrorAction SilentlyContinue).Trim()
+    }
+    if ($details) {
+        throw "Timed out waiting for listener on port $Port after $($Timeout)s. stderr: $details"
+    }
+    throw "Timed out waiting for listener on port $Port after $($Timeout)s."
 }
 
 function Wait-PortClosed {
@@ -66,7 +94,7 @@ function Start-Runtime {
         RedirectStandardError = (Join-Path $logDir 'runtime.stderr.log')
     }
     $process = Start-Process @args
-    Wait-Listener -Port $RuntimePort
+    Wait-Listener -Port $RuntimePort -Timeout 10 -Process $process -ErrorLog (Join-Path $logDir 'runtime.stderr.log')
     return $process
 }
 
@@ -99,7 +127,7 @@ function Start-AppServer {
             $env:CODEX_SQLITE_HOME = $previousSqliteHome
         }
     }
-    Wait-Listener -Port $AppServerPort
+    Wait-Listener -Port $AppServerPort -Timeout 40 -Process $process -ErrorLog (Join-Path $logDir 'app-server.stderr.log')
     return $process
 }
 
