@@ -170,7 +170,11 @@ pub(crate) fn thread_extensions(
     Arc::new(builder.build())
 }
 
-fn brine_work_status_from_goal_status(status: ThreadGoalStatus) -> WorkStatus {
+fn brine_work_status_from_goal_status(
+    status: codex_protocol::protocol::ThreadGoalStatus,
+) -> WorkStatus {
+    use codex_protocol::protocol::ThreadGoalStatus;
+
     match status {
         ThreadGoalStatus::Active => WorkStatus::Active,
         ThreadGoalStatus::Complete => WorkStatus::Complete,
