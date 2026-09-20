@@ -9,6 +9,7 @@ use codex_brine_runtime::SessionAttachment;
 use codex_brine_runtime::SessionId;
 use codex_brine_runtime::WorkId;
 use codex_brine_runtime::WorkRecord;
+use codex_brine_runtime::WorkStatus;
 use codex_brine_runtime::WorkspaceId;
 use codex_brine_runtime::WorkspaceRecord;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -60,10 +61,15 @@ fn attachment_retains_runtime_revision_and_pending_deltas() {
                 id: work_id.clone(),
                 workspace_id,
                 key: "root".to_owned(),
+                parent_work: None,
                 objective: "persistent work".to_owned(),
+                status: WorkStatus::Active,
+                assigned_thread: None,
+                candidate: None,
                 created_revision: 2,
                 last_revision: 4,
             },
+            work_graph: None,
             workspace_material: None,
             pending_deltas: vec![
                 RemoteDelta {
@@ -121,10 +127,15 @@ fn incompatible_runtime_protocol_is_rejected() {
                 id: work_id,
                 workspace_id,
                 key: "root".to_owned(),
+                parent_work: None,
                 objective: "protocol test".to_owned(),
+                status: WorkStatus::Active,
+                assigned_thread: None,
+                candidate: None,
                 created_revision: 1,
                 last_revision: 1,
             },
+            work_graph: None,
             workspace_material: None,
             pending_deltas: Vec::new(),
         },
