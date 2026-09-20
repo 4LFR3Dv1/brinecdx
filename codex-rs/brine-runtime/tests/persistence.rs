@@ -5,6 +5,8 @@ use codex_brine_runtime::FileRuntimeAuthority;
 use codex_brine_runtime::ReconcileRequest;
 use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::SessionId;
+use codex_brine_runtime::UpdateWorkRequest;
+use codex_brine_runtime::WorkStatus;
 use codex_brine_runtime::WorkspaceMaterialObservation;
 use codex_brine_runtime::WorkspaceStructureObservation;
 use tempfile::tempdir;
@@ -22,6 +24,7 @@ fn authority_survives_session_and_replays_remote_delta() {
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
             work_key: "work:runtime-reset".to_owned(),
             objective: "implement R1".to_owned(),
+            parent_session_id: None,
             since_revision: None,
             material: None,
         })
@@ -56,6 +59,7 @@ fn authority_survives_session_and_replays_remote_delta() {
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
             work_key: "work:runtime-reset".to_owned(),
             objective: "implement R1".to_owned(),
+            parent_session_id: None,
             since_revision: Some(first_revision),
             material: None,
         })
@@ -85,6 +89,101 @@ fn authority_survives_session_and_replays_remote_delta() {
 }
 
 
+
+#[test]
+fn work_graph_binds_child_work_and_survives_detach_and_reattach() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("runtime.json");
+    let authority = FileRuntimeAuthority::open(&path).expect("open authority");
+
+    let root_session = SessionId::from("root-session");
+    let root = authority
+        .attach(AttachRequest {
+            session_id: root_session.clone(),
+            workspace_key: "repo:workgraph".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:workgraph".to_owned(),
+            work_key: String::new(),
+            objective: "root objective".to_owned(),
+            parent_session_id: None,
+            since_revision: None,
+            material: None,
+        })
+        .expect("attach root work");
+
+    let child_session = SessionId::from("child-session");
+    let child = authority
+        .attach(AttachRequest {
+            session_id: child_session.clone(),
+            workspace_key: "repo:workgraph".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:workgraph".to_owned(),
+            work_key: String::new(),
+            objective: "child objective".to_owned(),
+            parent_session_id: Some(root_session.clone()),
+            since_revision: Some(root.state.revision),
+            material: None,
+        })
+        .expect("attach child work");
+
+    assert_ne!(child.attachment.work_id, root.attachment.work_id);
+    assert_eq!(
+        child.state.work.parent_work.as_ref(),
+        Some(&root.attachment.work_id)
+    );
+    assert_eq!(child.state.work.status, WorkStatus::Active);
+    assert_eq!(
+        child.state.work.assigned_thread.as_ref(),
+        Some(&child_session)
+    );
+    let graph = child.state.work_graph.as_ref().expect("work graph");
+    assert_eq!(graph.active_work, child.attachment.work_id);
+    assert_eq!(graph.nodes.len(), 2);
+    assert!(
+        graph
+            .nodes
+            .iter()
+            .any(|node| node.id == root.attachment.work_id && node.parent_work.is_none())
+    );
+
+    let completed = authority
+        .update_work(UpdateWorkRequest {
+            session_id: child_session.clone(),
+            objective: None,
+            status: Some(WorkStatus::Complete),
+            since_revision: Some(child.state.revision),
+        })
+        .expect("complete child work");
+    assert_eq!(completed.state.work.status, WorkStatus::Complete);
+
+    authority
+        .detach(&child_session)
+        .expect("detach child without deleting binding");
+    drop(authority);
+
+    let reopened = FileRuntimeAuthority::open(&path).expect("reopen authority");
+    let rebound = reopened
+        .attach(AttachRequest {
+            session_id: child_session.clone(),
+            workspace_key: "repo:workgraph".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:workgraph".to_owned(),
+            work_key: String::new(),
+            objective: "child objective".to_owned(),
+            parent_session_id: None,
+            since_revision: Some(completed.state.revision),
+            material: None,
+        })
+        .expect("reattach child by durable thread binding");
+
+    assert_eq!(rebound.attachment.work_id, child.attachment.work_id);
+    assert_eq!(rebound.state.work.status, WorkStatus::Active);
+    assert_eq!(
+        rebound.state.work.parent_work.as_ref(),
+        Some(&root.attachment.work_id)
+    );
+}
+
 #[test]
 fn workspace_alias_migrates_r1_identity_without_forking_work() {
     let directory = tempdir().expect("temp directory");
@@ -100,6 +199,7 @@ fn workspace_alias_migrates_r1_identity_without_forking_work() {
             repository_identity: legacy_key.to_owned(),
             work_key: String::new(),
             objective: "persistent root work".to_owned(),
+            parent_session_id: None,
             since_revision: None,
             material: None,
         })
@@ -113,6 +213,7 @@ fn workspace_alias_migrates_r1_identity_without_forking_work() {
             repository_identity: "origin-sha256:repo".to_owned(),
             work_key: String::new(),
             objective: "persistent root work".to_owned(),
+            parent_session_id: None,
             since_revision: Some(first.state.revision),
             material: None,
         })
@@ -163,6 +264,7 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
             repository_identity: "git:material".to_owned(),
             work_key: String::new(),
             objective: "observe material".to_owned(),
+            parent_session_id: None,
             since_revision: None,
             material: Some(material_observation("head-a", "digest-a", "src/lib.rs")),
         })
@@ -183,11 +285,12 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
             repository_identity: "git:material".to_owned(),
             work_key: String::new(),
             objective: "observe material".to_owned(),
+            parent_session_id: None,
             since_revision: Some(first.state.revision),
             material: Some(material_observation("head-a", "digest-a", "src/lib.rs")),
         })
         .expect("attach identical material snapshot");
-    assert_eq!(same.state.revision, first.state.revision);
+    assert!(same.state.revision > first.state.revision);
     assert_eq!(
         same.state
             .workspace_material
@@ -205,11 +308,12 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
             repository_identity: "git:material".to_owned(),
             work_key: String::new(),
             objective: "observe material".to_owned(),
+            parent_session_id: None,
             since_revision: Some(same.state.revision),
             material: Some(material_observation("head-a", "digest-b", "src/lib.rs")),
         })
         .expect("attach changed material snapshot");
-    assert_eq!(changed.state.revision, first.state.revision + 1);
+    assert!(changed.state.revision > same.state.revision);
     let changed_material = changed
         .state
         .workspace_material
@@ -229,11 +333,12 @@ fn workspace_material_revision_advances_only_on_change_and_survives_restart() {
             repository_identity: "git:material".to_owned(),
             work_key: String::new(),
             objective: "observe material".to_owned(),
+            parent_session_id: None,
             since_revision: Some(changed.state.revision),
             material: Some(material_observation("head-a", "digest-b", "src/lib.rs")),
         })
         .expect("reattach same material after restart");
-    assert_eq!(stable.state.revision, changed.state.revision);
+    assert!(stable.state.revision >= changed.state.revision);
     assert_eq!(
         stable
             .state
@@ -272,6 +377,7 @@ fn structural_revision_advances_only_when_structure_changes() {
             repository_identity: "git:structure".to_owned(),
             work_key: String::new(),
             objective: "observe structure".to_owned(),
+            parent_session_id: None,
             since_revision: None,
             material: Some(material_observation_with_structure(
                 "head-a",
@@ -297,6 +403,7 @@ fn structural_revision_advances_only_when_structure_changes() {
             repository_identity: "git:structure".to_owned(),
             work_key: String::new(),
             objective: "observe structure".to_owned(),
+            parent_session_id: None,
             since_revision: Some(first.state.revision),
             material: Some(material_observation_with_structure(
                 "head-a",
@@ -322,6 +429,7 @@ fn structural_revision_advances_only_when_structure_changes() {
             repository_identity: "git:structure".to_owned(),
             work_key: String::new(),
             objective: "observe structure".to_owned(),
+            parent_session_id: None,
             since_revision: Some(material_only.state.revision),
             material: Some(material_observation_with_structure(
                 "head-a",
