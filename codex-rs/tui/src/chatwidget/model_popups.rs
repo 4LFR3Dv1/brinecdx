@@ -267,6 +267,14 @@ impl ChatWidget {
                 .cmp(&self.provider_id_for_preset(right))
                 .then_with(|| left.display_name.cmp(&right.display_name))
         });
+        let first_provider = presets
+            .first()
+            .map(|preset| self.provider_id_for_preset(preset));
+        let multiple_providers = first_provider.as_ref().is_some_and(|first_provider| {
+            presets
+                .iter()
+                .any(|preset| self.provider_id_for_preset(preset) != *first_provider)
+        });
         let mut items: Vec<SelectionItem> = Vec::new();
         let model_ids = presets.iter().map(|preset| preset.id.clone()).collect();
         for preset in presets.into_iter() {
@@ -289,7 +297,11 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: format!("{provider_id} · {}", preset.display_name),
+                name: if multiple_providers {
+                    format!("{provider_id} · {}", preset.display_name)
+                } else {
+                    preset.display_name.clone()
+                },
                 description,
                 is_current,
                 is_default: preset.is_default,
@@ -309,7 +321,11 @@ impl ChatWidget {
 
         let header = self.model_menu_header(
             "Select Model and Effort",
-            "Models are grouped by configured cognition provider.",
+            if multiple_providers {
+                "Models are grouped by configured cognition provider."
+            } else {
+                ""
+            },
         );
         self.show_model_selection_view(
             model_ids,
