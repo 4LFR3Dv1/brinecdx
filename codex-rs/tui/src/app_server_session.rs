@@ -2994,6 +2994,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_model_overrides_forward_complete_route() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.model = Some("deepseek-v4-pro".to_string());
+        config.model_provider_id = "deepseek".to_string();
+        let thread_id = ThreadId::new();
+
+        let start = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Remote,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+        let resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            ThreadParamsMode::Remote,
+            /*remote_cwd_override*/ None,
+            ResumeModelSettings::OverrideFromCurrentConfig,
+        );
+        let fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Remote,
+            /*remote_cwd_override*/ None,
+        );
+
+        for (model, provider) in [
+            (start.model, start.model_provider),
+            (resume.model, resume.model_provider),
+            (fork.model, fork.model_provider),
+        ] {
+            assert_eq!(model.as_deref(), Some("deepseek-v4-pro"));
+            assert_eq!(provider.as_deref(), Some("deepseek"));
+        }
+    }
+
+    #[tokio::test]
     async fn thread_start_params_can_mark_clear_source() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
