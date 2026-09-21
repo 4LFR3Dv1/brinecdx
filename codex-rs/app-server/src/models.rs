@@ -5,9 +5,9 @@ use codex_app_server_protocol::ModelServiceTier;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
+use codex_core::thread_manager::RoutedModelPreset;
 use codex_http_client::HttpClientFactory;
 use codex_models_manager::manager::RefreshStrategy;
-use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
 pub async fn supported_models(
@@ -16,17 +16,26 @@ pub async fn supported_models(
     http_client_factory: HttpClientFactory,
 ) -> Vec<Model> {
     thread_manager
-        .list_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
+        .list_routed_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
         .await
         .into_iter()
-        .filter(|preset| include_hidden || preset.show_in_picker)
-        .map(model_from_preset)
+        .filter(|routed| include_hidden || routed.preset.show_in_picker)
+        .map(model_from_routed_preset)
         .collect()
 }
 
-fn model_from_preset(preset: ModelPreset) -> Model {
+fn model_from_routed_preset(routed: RoutedModelPreset) -> Model {
+    let RoutedModelPreset {
+        provider_id,
+        provider_name: _,
+        is_active_provider,
+        preset,
+    } = routed;
     Model {
-        id: preset.id.to_string(),
+        // Model.id is an opaque picker identity. Qualifying it keeps equal
+        // provider-local slugs distinct without changing the model slug sent
+        // to the provider.
+        id: format!("{provider_id}::{}", preset.id),
         model: preset.model.to_string(),
         upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
         upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
@@ -63,7 +72,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
             .collect(),
         default_service_tier: preset.default_service_tier,
         available_access_programs: preset.available_access_programs.map(Into::into),
-        is_default: preset.is_default,
+        is_default: is_active_provider && preset.is_default,
     }
 }
 
