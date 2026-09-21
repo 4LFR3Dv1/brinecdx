@@ -407,18 +407,15 @@ async fn models_manager_for_spawn_config(
     // discover their own catalog so a parent provider's models can never leak into
     // child validation.
     if !config.model_provider.is_openai() {
-        manager
-            .refresh_available_models(
+        // ModelsManager intentionally exposes refresh through list_models rather than the
+        // concrete OpenAiModelsManager refresh primitive. Trigger discovery here so later
+        // Offline validation observes the child provider's catalog.
+        let _ = manager
+            .list_models(
                 RefreshStrategy::OnlineIfUncached,
                 config.http_client_factory(),
             )
-            .await
-            .map_err(|err| {
-                format!(
-                    "Failed to load model catalog for subagent provider `{}`: {err}",
-                    config.model_provider_id
-                )
-            })?;
+            .await;
     }
 
     Ok(manager)
