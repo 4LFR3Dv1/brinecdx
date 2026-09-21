@@ -141,6 +141,7 @@ impl ChatWidget {
                     let preset_for_action = preset.clone();
                     vec![Box::new(move |tx| {
                         tx.send(AppEvent::OpenReasoningPopup {
+                            provider_id: provider_id.clone(),
                             model: preset_for_action.clone(),
                         });
                     })]
@@ -293,6 +294,7 @@ impl ChatWidget {
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
+                    provider_id: provider_id.clone(),
                     model: preset_for_event,
                 });
             })];
@@ -351,7 +353,6 @@ impl ChatWidget {
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         let thread_id = self.thread_id();
         let sparkle_thread = self.sparkle_thread_for_picker_action(&model_for_action);
-        let route_changes_provider = provider_id_for_action != self.config.model_provider_id;
         vec![Box::new(move |tx| {
             if model_for_action == LUNA_RESERVE_MODEL {
                 // Reserve is temporary: update the active task without persisting a model default.
@@ -362,31 +363,20 @@ impl ChatWidget {
                     });
                 }
             } else if effort_for_action == Some(ReasoningEffortConfig::Ultra) {
-                let action = if route_changes_provider {
+                tx.send(
                     AstraModelPickerAction::ApplyAdvancedReasoningRoute {
                         provider_id: provider_id_for_action.clone(),
                         effort: ReasoningEffortConfig::Ultra,
                     }
-                } else {
-                    AstraModelPickerAction::ApplyAdvancedReasoning {
-                        effort: ReasoningEffortConfig::Ultra,
-                    }
-                };
-                tx.send(action.into_picker_event(sparkle_thread, model_for_action.clone()));
+                    .into_picker_event(sparkle_thread, model_for_action.clone()),
+                );
             } else if should_prompt_plan_mode_scope {
-                if route_changes_provider {
-                    tx.send(AppEvent::OpenPlanReasoningScopePromptRoute {
-                        provider_id: provider_id_for_action.clone(),
-                        model: model_for_action.clone(),
-                        effort: effort_for_action.clone(),
-                    });
-                } else {
-                    tx.send(AppEvent::OpenPlanReasoningScopePrompt {
-                        model: model_for_action.clone(),
-                        effort: effort_for_action.clone(),
-                    });
-                }
-            } else if route_changes_provider {
+                tx.send(AppEvent::OpenPlanReasoningScopePromptRoute {
+                    provider_id: provider_id_for_action.clone(),
+                    model: model_for_action.clone(),
+                    effort: effort_for_action.clone(),
+                });
+            } else {
                 tx.send(
                     AstraModelPickerAction::UpdateModelRoute {
                         provider_id: provider_id_for_action.clone(),
@@ -396,16 +386,6 @@ impl ChatWidget {
                 );
                 tx.send(AppEvent::PersistModelRouteSelection {
                     provider_id: provider_id_for_action.clone(),
-                    model: model_for_action.clone(),
-                    effort: effort_for_action.clone(),
-                });
-            } else {
-                tx.send(
-                    AstraModelPickerAction::UpdateModel
-                        .into_picker_event(sparkle_thread, model_for_action.clone()),
-                );
-                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action.clone()));
-                tx.send(AppEvent::PersistModelSelection {
                     model: model_for_action.clone(),
                     effort: effort_for_action.clone(),
                 });
@@ -577,6 +557,14 @@ impl ChatWidget {
     /// be selected accidentally while moving through the normal effort scale.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         let provider_id = self.provider_id_for_preset(&preset);
+        self.open_reasoning_popup_for_route(provider_id, preset);
+    }
+
+    pub(crate) fn open_reasoning_popup_for_route(
+        &mut self,
+        provider_id: String,
+        preset: ModelPreset,
+    ) {
         let default_effort = preset.default_reasoning_effort.clone();
         let supported = &preset.supported_reasoning_efforts;
         let in_plan_mode =
@@ -725,8 +713,10 @@ impl ChatWidget {
                 "consume"
             };
             let preset_for_action = preset;
+            let provider_id_for_action = provider_id.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenAdvancedReasoningPopup {
+                    provider_id: provider_id_for_action.clone(),
                     model: preset_for_action.clone(),
                 });
             })];
@@ -760,6 +750,14 @@ impl ChatWidget {
     /// Open the explicit Max/Ultra effort picker for the given model.
     pub(crate) fn open_advanced_reasoning_popup(&mut self, preset: ModelPreset) {
         let provider_id = self.provider_id_for_preset(&preset);
+        self.open_advanced_reasoning_popup_for_route(provider_id, preset);
+    }
+
+    pub(crate) fn open_advanced_reasoning_popup_for_route(
+        &mut self,
+        provider_id: String,
+        preset: ModelPreset,
+    ) {
         let mut choices = preset
             .supported_reasoning_efforts
             .iter()
