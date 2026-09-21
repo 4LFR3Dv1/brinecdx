@@ -30,12 +30,16 @@ impl ChatWidget {
 
         // Only borrow the normal model's presentation and supported efforts. Selecting an
         // effort must keep the authorized Reserve model and the saved ordinary return target.
+        // Resolve the route before replacing the model slug so the reasoning popup keeps the
+        // provider identity attached to the catalog preset.
+        let provider_id = self.provider_id_for_preset(&preset);
         preset.model = LUNA_RESERVE_MODEL.to_string();
         let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
         let name = preset.display_name.clone();
         let description = (!preset.description.is_empty()).then_some(preset.description.clone());
         let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             tx.send(AppEvent::OpenReasoningPopup {
+                provider_id: provider_id.clone(),
                 model: preset.clone(),
             });
         })];
