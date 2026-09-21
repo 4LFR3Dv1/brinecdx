@@ -76,6 +76,8 @@ async fn cognition_provider_live_round_trip_preserves_thread_identity() -> Resul
     let deepseek_provider = r#"{ name = "DeepSeek", base_url = "https://api.deepseek.com", env_key = "DEEPSEEK_API_KEY", supports_websockets = false }"#;
     let args = vec![
         "-c".to_string(),
+        "forced_login_method=chatgpt".to_string(),
+        "-c".to_string(),
         "model_provider=deepseek".to_string(),
         "-c".to_string(),
         format!("model={deepseek_model}"),
