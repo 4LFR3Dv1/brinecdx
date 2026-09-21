@@ -102,6 +102,19 @@ pub(crate) fn build_model_selection_edits(
     ]
 }
 
+pub(crate) fn build_model_route_selection_edits(
+    provider_id: &str,
+    model: &str,
+    effort: Option<impl ToString>,
+) -> Vec<ConfigEdit> {
+    let mut edits = build_model_selection_edits(model, effort);
+    edits.insert(
+        0,
+        replace_config_value("model_provider", serde_json::json!(provider_id)),
+    );
+    edits
+}
+
 pub(crate) fn build_service_tier_selection_edits(service_tier: Option<&str>) -> Vec<ConfigEdit> {
     let service_tier_edit = service_tier.map_or_else(
         || clear_config_value("service_tier"),
