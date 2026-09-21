@@ -1119,6 +1119,13 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Atomically update provider, model, and reasoning for the active thread.
+    UpdateModelRoute {
+        provider_id: String,
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
     /// Apply a final Astra picker action and offer the flourish only if it changed the model on
     /// its original task. Automatic model updates do not use this event.
     AstraSelectedFromModelPicker {
@@ -1157,8 +1164,22 @@ pub(crate) enum AppEvent {
         effort: Option<ReasoningEffort>,
     },
 
+    /// Persist an explicit cognition route as the default.
+    PersistModelRouteSelection {
+        provider_id: String,
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
     /// Apply a model and effort only to the active session, preserving saved defaults.
     SelectSessionModel {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
+    /// Apply an explicit cognition route only to the active session.
+    SelectSessionModelRoute {
+        provider_id: String,
         model: String,
         effort: Option<ReasoningEffort>,
     },
@@ -1213,8 +1234,22 @@ pub(crate) enum AppEvent {
         effort: ReasoningEffort,
     },
 
+    /// Apply advanced reasoning while atomically selecting the cognition provider.
+    ApplyAdvancedReasoningRoute {
+        provider_id: String,
+        model: String,
+        effort: ReasoningEffort,
+    },
+
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
     OpenPlanReasoningScopePrompt {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
+    /// Open the Plan-mode reasoning scope prompt for an explicit cognition route.
+    OpenPlanReasoningScopePromptRoute {
+        provider_id: String,
         model: String,
         effort: Option<ReasoningEffort>,
     },

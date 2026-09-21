@@ -360,11 +360,17 @@ impl Session {
                 .file_system_sandbox_policy()
                 .has_full_disk_write_access(),
         };
+        let models_manager = self
+            .services
+            .models_manager
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         current
             .apply_update(
                 update,
                 &constraints,
-                self.services.models_manager.as_ref(),
+                models_manager.as_ref(),
                 &overrides,
                 self.features.enabled(Feature::FastMode),
             )

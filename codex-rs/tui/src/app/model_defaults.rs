@@ -13,6 +13,80 @@ use codex_protocol::openai_models::ReasoningEffort;
 use color_eyre::eyre::Result;
 
 impl App {
+    fn apply_model_provider_route(&mut self, provider_id: &str) {
+        if let Some(provider) = self.config.model_providers.get(provider_id).cloned() {
+            self.config.model_provider_id = provider_id.to_string();
+            self.config.model_provider = provider;
+        }
+        self.chat_widget.set_model_provider_id(provider_id);
+    }
+
+    pub(super) async fn select_session_model_route(
+        &mut self,
+        app_server: &mut AppServerSession,
+        provider_id: String,
+        model: String,
+        effort: Option<ReasoningEffort>,
+    ) {
+        let route_changed = self.chat_widget.current_model_provider_id() != provider_id
+            || self.chat_widget.current_model() != model
+            || self.chat_widget.current_collaboration_mode().model() != model;
+        if route_changed
+            && self
+                .active_thread_model_route_setting_update_params(provider_id.clone(), model.clone())
+                .is_some_and(|params| params.permissions.is_some())
+            && self.reject_pending_permission_change()
+        {
+            return;
+        }
+        let in_plan_mode = self.chat_widget.effective_collaboration_mode().mode == ModeKind::Plan;
+        let ultra = effort == Some(ReasoningEffort::Ultra);
+        let clear_default_ultra = self
+            .chat_widget
+            .current_collaboration_mode()
+            .reasoning_effort()
+            == Some(ReasoningEffort::Ultra)
+            && self.config.model_reasoning_effort != Some(ReasoningEffort::Ultra);
+        let clear_plan_ultra = self.chat_widget.config_ref().plan_mode_reasoning_effort
+            == Some(ReasoningEffort::Ultra)
+            && self.config.plan_mode_reasoning_effort != Some(ReasoningEffort::Ultra);
+
+        self.apply_model_provider_route(&provider_id);
+        self.chat_widget.set_model(&model);
+        if !in_plan_mode || ultra || clear_default_ultra {
+            self.chat_widget.set_reasoning_effort(effort.clone());
+        }
+        if in_plan_mode || ultra || clear_plan_ultra {
+            self.chat_widget
+                .set_plan_mode_reasoning_effort(effort.clone());
+        }
+
+        if route_changed {
+            self.sync_active_thread_model_route_setting(
+                app_server,
+                provider_id.clone(),
+                model.clone(),
+                effort.clone(),
+            )
+            .await;
+        } else if let Some(mut params) =
+            self.active_thread_reasoning_setting_update_params(effort.clone())
+        {
+            params.collaboration_mode = Some(self.chat_widget.effective_collaboration_mode());
+            self.send_thread_settings_update(app_server, params).await;
+        }
+        self.sync_active_thread_service_tier_to_cached_session()
+            .await;
+
+        let mut message = format!("Model changed to {provider_id}/{model}");
+        if let Some(label) = Self::reasoning_label_for(&model, effort.as_ref()) {
+            message.push(' ');
+            message.push_str(&label);
+        }
+        message.push_str(" for this session only");
+        self.chat_widget.add_info_message(message, /*hint*/ None);
+    }
+
     pub(super) async fn select_session_model(
         &mut self,
         app_server: &mut AppServerSession,

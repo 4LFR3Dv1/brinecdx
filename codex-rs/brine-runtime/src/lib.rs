@@ -32,3 +32,6 @@ pub use wire::TcpRuntimeAuthority;
 pub use model::StructuralSymbol;
 pub use model::UnresolvedStructuralRelation;
 pub use model::WorkspaceStructureObservation;
+pub use model::UpdateWorkRequest;
+pub use model::WorkGraphSnapshot;
+pub use model::WorkStatus;

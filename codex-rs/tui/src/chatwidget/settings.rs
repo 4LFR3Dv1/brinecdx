@@ -244,6 +244,17 @@ impl ChatWidget {
         self.local_settings.tui.theme = theme;
     }
 
+    pub(crate) fn current_model_provider_id(&self) -> &str {
+        &self.config.model_provider_id
+    }
+
+    pub(crate) fn set_model_provider_id(&mut self, provider_id: &str) {
+        self.config.model_provider_id = provider_id.to_string();
+        if let Some(provider) = self.config.model_providers.get(provider_id).cloned() {
+            self.config.model_provider = provider;
+        }
+    }
+
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
         if model != self.current_model() {

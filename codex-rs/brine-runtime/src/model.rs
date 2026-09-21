@@ -4,7 +4,7 @@ use std::fmt;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub const RUNTIME_PROTOCOL_VERSION: u32 = 2;
+pub const RUNTIME_PROTOCOL_VERSION: u32 = 3;
 
 macro_rules! id_type {
     ($name:ident) => {
@@ -60,14 +60,38 @@ pub struct WorkspaceRecord {
     pub created_revision: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkStatus {
+    #[default]
+    Active,
+    Paused,
+    Complete,
+    Failed,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkRecord {
     pub id: WorkId,
     pub workspace_id: WorkspaceId,
     pub key: String,
+    #[serde(default)]
+    pub parent_work: Option<WorkId>,
     pub objective: String,
+    #[serde(default)]
+    pub status: WorkStatus,
+    #[serde(default)]
+    pub assigned_thread: Option<SessionId>,
+    #[serde(default)]
+    pub candidate: Option<String>,
     pub created_revision: u64,
     pub last_revision: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkGraphSnapshot {
+    pub active_work: WorkId,
+    pub nodes: Vec<WorkRecord>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -150,6 +174,8 @@ pub struct RuntimeState {
     pub workspace: WorkspaceRecord,
     pub work: WorkRecord,
     #[serde(default)]
+    pub work_graph: Option<WorkGraphSnapshot>,
+    #[serde(default)]
     pub workspace_material: Option<WorkspaceMaterialState>,
     pub pending_deltas: Vec<RemoteDelta>,
 }
@@ -163,9 +189,21 @@ pub struct AttachRequest {
     pub repository_identity: String,
     pub work_key: String,
     pub objective: String,
+    #[serde(default)]
+    pub parent_session_id: Option<SessionId>,
     pub since_revision: Option<u64>,
     #[serde(default)]
     pub material: Option<WorkspaceMaterialObservation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UpdateWorkRequest {
+    pub session_id: SessionId,
+    #[serde(default)]
+    pub objective: Option<String>,
+    #[serde(default)]
+    pub status: Option<WorkStatus>,
+    pub since_revision: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

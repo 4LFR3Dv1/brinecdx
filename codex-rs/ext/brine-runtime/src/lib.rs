@@ -8,6 +8,8 @@ mod structure;
 mod workspace;
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -22,9 +24,13 @@ use codex_brine_runtime::RuntimeState;
 use codex_brine_runtime::RUNTIME_PROTOCOL_VERSION;
 use codex_brine_runtime::SessionAttachment;
 use codex_brine_runtime::SessionId;
+use codex_brine_runtime::UpdateWorkRequest;
+use codex_brine_runtime::WorkStatus;
 use codex_extension_api::CommandStartInput;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ThreadIdleCause;
+use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
@@ -36,6 +42,7 @@ use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
+use codex_protocol::protocol::SessionSource;
 
 pub use workspace::WorkspaceIdentity;
 pub use workspace::identify_local_workspace;
@@ -82,11 +89,20 @@ pub struct AttachedRuntime {
 }
 
 type ConfigResolver<C> = dyn Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkGoalState {
+    pub objective: String,
+    pub status: WorkStatus,
+}
+
+pub type WorkGoalFuture = Pin<Box<dyn Future<Output = Option<WorkGoalState>> + Send + 'static>>;
+pub type WorkGoalResolver = dyn Fn(SessionId) -> WorkGoalFuture + Send + Sync + 'static;
 
 /// A lifecycle contributor that attaches and reconciles persistent Brine work.
 pub struct BrineRuntimeExtension<C> {
     authority: Arc<dyn RuntimeAuthority>,
     config: Arc<ConfigResolver<C>>,
+    goal_resolver: Arc<WorkGoalResolver>,
 }
 
 impl<C> std::fmt::Debug for BrineRuntimeExtension<C> {
@@ -102,10 +118,12 @@ impl<C> BrineRuntimeExtension<C> {
     pub fn new(
         authority: Arc<dyn RuntimeAuthority>,
         config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
+        goal_resolver: Arc<WorkGoalResolver>,
     ) -> Self {
         Self {
             authority,
             config: Arc::new(config),
+            goal_resolver,
         }
     }
 }
@@ -116,7 +134,25 @@ pub fn install<C: Sync + 'static>(
     authority: Arc<dyn RuntimeAuthority>,
     config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
 ) {
-    let extension = Arc::new(BrineRuntimeExtension::new(authority, config));
+    install_with_goal_resolver(
+        builder,
+        authority,
+        config,
+        Arc::new(|_| Box::pin(async { None })),
+    );
+}
+
+pub fn install_with_goal_resolver<C: Sync + 'static>(
+    builder: &mut ExtensionRegistryBuilder<C>,
+    authority: Arc<dyn RuntimeAuthority>,
+    config: impl Fn(&C) -> Option<SessionAttachmentConfig> + Send + Sync + 'static,
+    goal_resolver: Arc<WorkGoalResolver>,
+) {
+    let extension = Arc::new(BrineRuntimeExtension::new(
+        authority,
+        config,
+        goal_resolver,
+    ));
     builder.thread_lifecycle_contributor(extension.clone());
     builder.turn_lifecycle_contributor(extension.clone());
     builder.tool_lifecycle_contributor(extension);
@@ -149,7 +185,11 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
             let Some(config) = (self.config)(input.config) else {
                 return;
             };
-            let session_id = SessionId::from(input.session_store.level_id());
+            // Codex session_store is tree-scoped: subagents share the root session_id.
+            // Brine Work bindings are thread-scoped, so use the concrete thread identity.
+            let session_id = runtime_session_id(input.thread_store);
+            let (parent_session_id, objective) =
+                work_start_identity(input.session_source, &config.objective);
             let material = observe_material_or_warn(&config.local_workspace, None);
             let result = self.authority.attach(AttachRequest {
                 session_id,
@@ -157,7 +197,8 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 workspace_aliases: config.workspace_aliases,
                 repository_identity: config.repository_identity.clone(),
                 work_key: config.work_key,
-                objective: config.objective,
+                objective,
+                parent_session_id,
                 since_revision: None,
                 material,
             });
@@ -204,6 +245,37 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BrineRuntimeExtension<C> {
                 }
                 Err(error) => log_attachment_error("reconcile", error),
             }
+        })
+    }
+
+    fn on_thread_idle<'a>(&'a self, input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(current) = input.thread_store.get::<AttachedRuntime>() else {
+                return;
+            };
+            if let Some(goal) = (self.goal_resolver)(current.remote.session_id.clone()).await {
+                let objective = (goal.objective != current.state.work.objective)
+                    .then_some(goal.objective);
+                let status = (goal.status != current.state.work.status).then_some(goal.status);
+                if objective.is_some() || status.is_some() {
+                    self.update_work_state(
+                        input.thread_store,
+                        objective,
+                        status,
+                        "thread_idle_goal",
+                    );
+                }
+                return;
+            }
+            if current.state.work.parent_work.is_none() {
+                return;
+            }
+            let status = match input.cause {
+                ThreadIdleCause::Completed => WorkStatus::Complete,
+                ThreadIdleCause::Interrupted => WorkStatus::Paused,
+                ThreadIdleCause::Failed => WorkStatus::Failed,
+            };
+            self.update_work_state(input.thread_store, None, Some(status), "thread_idle");
         })
     }
 
@@ -257,6 +329,35 @@ impl<C: Sync> ToolLifecycleContributor for BrineRuntimeExtension<C> {
 }
 
 impl<C: Sync> BrineRuntimeExtension<C> {
+    fn update_work_state(
+        &self,
+        thread_store: &codex_extension_api::ExtensionData,
+        objective: Option<String>,
+        status: Option<WorkStatus>,
+        operation: &str,
+    ) {
+        let Some(current) = thread_store.get::<AttachedRuntime>() else {
+            return;
+        };
+        let result = self.authority.update_work(UpdateWorkRequest {
+            session_id: current.remote.session_id.clone(),
+            objective,
+            status,
+            since_revision: Some(current.state.revision),
+        });
+        match result {
+            Ok(snapshot) => {
+                if !snapshot_protocol_compatible(operation, &snapshot) {
+                    return;
+                }
+                let attached = attached_runtime(snapshot, current.local_workspace.clone());
+                log_attachment_success(operation, &attached);
+                thread_store.insert(attached);
+            }
+            Err(error) => log_attachment_error(operation, error),
+        }
+    }
+
     fn refresh_workspace_state(
         &self,
         thread_store: &codex_extension_api::ExtensionData,
@@ -320,9 +421,54 @@ fn outcome_may_have_mutated(outcome: ToolCallOutcome) -> bool {
 impl<C: Sync> TurnLifecycleContributor for BrineRuntimeExtension<C> {
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
+            if let Some(current) = input.thread_store.get::<AttachedRuntime>() {
+                let goal = (self.goal_resolver)(current.remote.session_id.clone()).await;
+                let fallback_status = (goal.is_none()
+                    && current.state.work.parent_work.is_some()
+                    && current.state.work.status != WorkStatus::Active)
+                    .then_some(WorkStatus::Active);
+                let objective = goal.as_ref().and_then(|goal| {
+                    (goal.objective != current.state.work.objective)
+                        .then(|| goal.objective.clone())
+                });
+                let goal_status = goal.as_ref().and_then(|goal| {
+                    (goal.status != current.state.work.status).then_some(goal.status)
+                });
+                let status = goal_status.or(fallback_status);
+                if objective.is_some() || status.is_some() {
+                    self.update_work_state(
+                        input.thread_store,
+                        objective,
+                        status,
+                        "turn_start_work",
+                    );
+                }
+            }
             self.refresh_workspace_state(input.thread_store, "turn_start", true);
         })
     }
+}
+
+fn runtime_session_id(thread_store: &codex_extension_api::ExtensionData) -> SessionId {
+    SessionId::from(thread_store.level_id())
+}
+
+fn work_start_identity(
+    session_source: &SessionSource,
+    fallback_objective: &str,
+) -> (Option<SessionId>, String) {
+    let parent_session_id = session_source
+        .parent_thread_id()
+        .map(|thread_id| SessionId::from(thread_id.to_string()));
+    let objective = if parent_session_id.is_some() {
+        session_source
+            .get_agent_path()
+            .map(|path| path.to_string())
+            .unwrap_or_else(|| fallback_objective.to_owned())
+    } else {
+        fallback_objective.to_owned()
+    };
+    (parent_session_id, objective)
 }
 
 fn observe_material_or_warn(

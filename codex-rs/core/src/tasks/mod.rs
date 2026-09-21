@@ -468,7 +468,7 @@ impl Session {
         };
 
         self.services
-            .models_manager
+            .models_manager()
             .refresh_after_auth_change(self.get_config().await.http_client_factory())
             .await;
         // A completion-triggered wakeup can be interrupted while discovery waits.

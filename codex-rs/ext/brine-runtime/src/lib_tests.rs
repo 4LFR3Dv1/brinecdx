@@ -1,24 +1,34 @@
 use std::sync::Arc;
 
+use codex_brine_runtime::AttachRequest;
 use codex_brine_runtime::AttachmentSnapshot;
 use codex_brine_runtime::InMemoryRuntimeAuthority;
 use codex_brine_runtime::RemoteDelta;
+use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::RUNTIME_PROTOCOL_VERSION;
 use codex_brine_runtime::RuntimeState;
 use codex_brine_runtime::SessionAttachment;
 use codex_brine_runtime::SessionId;
 use codex_brine_runtime::WorkId;
 use codex_brine_runtime::WorkRecord;
+use codex_brine_runtime::WorkStatus;
 use codex_brine_runtime::WorkspaceId;
 use codex_brine_runtime::WorkspaceRecord;
+use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ToolCallOutcome;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::ModelRoute;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 
 use super::LocalWorkspace;
 use super::attached_runtime;
 use super::install;
 use super::outcome_may_have_mutated;
+use super::runtime_session_id;
 use super::snapshot_protocol_compatible;
+use super::work_start_identity;
 
 #[test]
 fn install_registers_runtime_observers_without_model_context() {
@@ -60,10 +70,15 @@ fn attachment_retains_runtime_revision_and_pending_deltas() {
                 id: work_id.clone(),
                 workspace_id,
                 key: "root".to_owned(),
+                parent_work: None,
                 objective: "persistent work".to_owned(),
+                status: WorkStatus::Active,
+                assigned_thread: None,
+                candidate: None,
                 created_revision: 2,
                 last_revision: 4,
             },
+            work_graph: None,
             workspace_material: None,
             pending_deltas: vec![
                 RemoteDelta {
@@ -121,16 +136,144 @@ fn incompatible_runtime_protocol_is_rejected() {
                 id: work_id,
                 workspace_id,
                 key: "root".to_owned(),
+                parent_work: None,
                 objective: "protocol test".to_owned(),
+                status: WorkStatus::Active,
+                assigned_thread: None,
+                candidate: None,
                 created_revision: 1,
                 last_revision: 1,
             },
+            work_graph: None,
             workspace_material: None,
             pending_deltas: Vec::new(),
         },
     };
 
     assert!(!snapshot_protocol_compatible("test", &snapshot));
+}
+
+
+#[test]
+fn thread_spawn_source_maps_to_parent_work_lineage_without_tool_output_parsing() {
+    let parent = ThreadId::new();
+    let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: parent,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+
+    let (parent_session_id, objective) =
+        work_start_identity(&source, "fallback child objective");
+
+    assert_eq!(
+        parent_session_id,
+        Some(SessionId::from(parent.to_string()))
+    );
+    assert_eq!(objective, "fallback child objective");
+
+    let (root_parent, root_objective) =
+        work_start_identity(&SessionSource::Cli, "root objective");
+    assert!(root_parent.is_none());
+    assert_eq!(root_objective, "root objective");
+}
+
+#[test]
+fn runtime_session_identity_uses_concrete_thread_store_for_subagents() {
+    let root_thread = ThreadId::new();
+    let child_thread = ThreadId::new();
+
+    // Codex deliberately shares the root session identity across the agent tree,
+    // while each thread gets its own thread-scoped ExtensionData.
+    let session_store = ExtensionData::new(root_thread.to_string());
+    let thread_store = ExtensionData::new(child_thread.to_string());
+
+    assert_ne!(session_store.level_id(), thread_store.level_id());
+    assert_eq!(
+        runtime_session_id(&thread_store),
+        SessionId::from(child_thread.to_string())
+    );
+    assert_ne!(
+        runtime_session_id(&thread_store),
+        SessionId::from(root_thread.to_string())
+    );
+}
+
+#[test]
+fn cognition_provider_round_trip_does_not_rebind_runtime_work() {
+    let authority = InMemoryRuntimeAuthority::default();
+    let thread_id = ThreadId::new();
+    let session_id = SessionId::from(thread_id.to_string());
+    let first = authority
+        .attach(AttachRequest {
+            session_id: session_id.clone(),
+            workspace_key: "repo:multi-provider".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
+            work_key: "work:multi-provider".to_owned(),
+            objective: "prove cognition routing invariance".to_owned(),
+            parent_session_id: None,
+            since_revision: None,
+            material: None,
+        })
+        .expect("attach persistent work");
+
+    let workspace_id = first.attachment.workspace_id.clone();
+    let work_id = first.attachment.work_id.clone();
+    let routes = [
+        ModelRoute {
+            provider_id: "deepseek".to_owned(),
+            model: "deepseek-chat".to_owned(),
+            reasoning_effort: None,
+        },
+        ModelRoute {
+            provider_id: "openai".to_owned(),
+            model: "gpt-5.6-sol".to_owned(),
+            reasoning_effort: None,
+        },
+        ModelRoute {
+            provider_id: "deepseek".to_owned(),
+            model: "deepseek-chat".to_owned(),
+            reasoning_effort: None,
+        },
+    ];
+
+    for route in routes {
+        assert!(!route.provider_id.is_empty());
+        assert_eq!(
+            runtime_session_id(&ExtensionData::new(thread_id.to_string())),
+            session_id
+        );
+        let state = authority
+            .state(&workspace_id, &work_id, None)
+            .expect("read persistent work during cognition switch");
+        assert_eq!(state.workspace.id, workspace_id);
+        assert_eq!(state.work.id, work_id);
+        assert_eq!(state.work.assigned_thread.as_ref(), Some(&session_id));
+    }
+
+    let reattached = authority
+        .attach(AttachRequest {
+            session_id: session_id.clone(),
+            workspace_key: "repo:multi-provider".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
+            work_key: "work:multi-provider".to_owned(),
+            objective: "prove cognition routing invariance".to_owned(),
+            parent_session_id: None,
+            since_revision: Some(first.state.revision),
+            material: None,
+        })
+        .expect("reattach after cognition round trip");
+
+    assert_eq!(reattached.attachment.workspace_id, workspace_id);
+    assert_eq!(reattached.attachment.work_id, work_id);
+    assert_eq!(
+        reattached.state.work.assigned_thread.as_ref(),
+        Some(&session_id)
+    );
 }
 
 #[test]

@@ -1098,7 +1098,7 @@ impl Session {
         }
         if !crate::guardian::is_basic_session_source(&configuration.session_source) {
             self.services
-                .models_manager
+                .models_manager()
                 .refresh_after_auth_change(
                     self.build_effective_session_config(&configuration)
                         .http_client_factory(),
@@ -1174,10 +1174,11 @@ impl Session {
             .map(TurnEnvironment::permission_profile)
             .cloned()
             .unwrap_or_else(|| session_configuration.permission_profile());
+        let models_manager = self.services.models_manager();
         let model_info = session_configuration
             .step_settings
             .resolve_model_info(
-                self.services.models_manager.as_ref(),
+                models_manager.as_ref(),
                 &session_configuration.model_info_overrides,
             )
             .await;
@@ -1247,7 +1248,7 @@ impl Session {
             self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
             step_settings,
-            &self.services.models_manager,
+            &models_manager,
             self.services
                 .network_proxy
                 .load_full()

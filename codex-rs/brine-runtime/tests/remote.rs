@@ -65,6 +65,7 @@ fn remote_authority_survives_the_codex_session_boundary() {
                 repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
                 work_key: String::new(),
                 objective: "implement R1".to_owned(),
+            parent_session_id: None,
                 since_revision: None,
                 material: None,
             })
@@ -101,6 +102,7 @@ fn remote_authority_survives_the_codex_session_boundary() {
             repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
             work_key: String::new(),
             objective: "implement R1".to_owned(),
+            parent_session_id: None,
             since_revision: Some(first_revision),
             material: None,
         })

@@ -830,6 +830,7 @@ impl Session {
         let service_tier =
             get_service_tier(config.service_tier.clone(), fast_mode_enabled, &model_info);
         let session_configuration = SessionConfiguration {
+            model_provider_id: config.model_provider_id.clone(),
             provider: create_model_provider(
                 config.model_provider.clone(),
                 Some(Arc::clone(&auth_manager)),
@@ -1869,9 +1870,16 @@ impl Session {
         should_commit: impl FnOnce(&SessionConfiguration, &SessionConfiguration) -> bool + Send,
     ) -> ConstraintResult<Option<SessionSettingsCommit>> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let (commit, previous_config, new_config, permission_profile_changed, mcp_inputs_changed) = {
+        let (
+            commit,
+            previous_config,
+            new_config,
+            permission_profile_changed,
+            mcp_inputs_changed,
+            provider_changed,
+        ) = {
             let mut state = self.state.lock().await;
-            let updated = match self.apply_session_settings(&state.session_configuration, &updates)
+            let mut updated = match self.apply_session_settings(&state.session_configuration, &updates)
             {
                 Ok(updated) => updated,
                 Err(err) => {
@@ -1879,6 +1887,15 @@ impl Session {
                     return Err(err);
                 }
             };
+
+            let provider_changed =
+                updated.model_provider_id != state.session_configuration.model_provider_id;
+            if provider_changed {
+                updated.provider = create_model_provider(
+                    updated.original_config_do_not_use.model_provider.clone(),
+                    Some(Arc::clone(&self.services.auth_manager)),
+                );
+            }
 
             if !should_commit(&state.session_configuration, &updated) {
                 return Ok(None);
@@ -1927,8 +1944,12 @@ impl Session {
                 new_config,
                 permission_profile_changed,
                 mcp_inputs_changed,
+                provider_changed,
             )
         };
+        if provider_changed {
+            self.activate_cognition_provider(&commit.configuration);
+        }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
@@ -1938,6 +1959,36 @@ impl Session {
             self.schedule_mcp_prewarm();
         }
         Ok(Some(commit))
+    }
+
+    fn activate_cognition_provider(&self, configuration: &SessionConfiguration) {
+        let config = configuration.original_config_do_not_use.as_ref();
+        let models_manager = configuration.provider.models_manager(
+            config.codex_home.to_path_buf(),
+            config.model_catalog.clone(),
+        );
+        models_manager.set_api_key_model_discovery_enabled(
+            config.features.enabled(Feature::ApiKeyModelDiscovery),
+        );
+
+        let next_client = self
+            .services
+            .model_client
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .with_provider_info(configuration.provider.info().clone());
+
+        *self
+            .services
+            .models_manager
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = models_manager;
+        *self
+            .services
+            .model_client
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = next_client;
     }
 
     pub(crate) async fn preview_settings(

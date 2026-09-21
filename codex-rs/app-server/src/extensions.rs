@@ -10,7 +10,9 @@ use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_app_server_protocol::WarningNotification;
 use codex_brine_runtime::TcpRuntimeAuthority;
+use codex_brine_runtime::WorkStatus;
 use codex_brine_runtime_extension::LocalWorkspace;
+use codex_brine_runtime_extension::WorkGoalState;
 use codex_brine_runtime_extension::identify_local_workspace;
 use codex_brine_runtime_extension::SessionAttachmentConfig;
 use codex_core::ThreadManager;
@@ -74,7 +76,9 @@ pub(crate) fn thread_extensions(
         builder.turn_start_admission(admission);
     }
     if let Some(address) = brine_runtime_authority_address() {
-        codex_brine_runtime_extension::install(
+        let brine_goal_service = goal_service.clone();
+        let brine_state_db = state_db.clone();
+        codex_brine_runtime_extension::install_with_goal_resolver(
             &mut builder,
             Arc::new(TcpRuntimeAuthority::new(address)),
             |config: &Config| {
@@ -92,6 +96,23 @@ pub(crate) fn thread_extensions(
                     },
                 })
             },
+            Arc::new(move |session_id| {
+                let goal_service = brine_goal_service.clone();
+                let state_db = brine_state_db.clone();
+                Box::pin(async move {
+                    let state_db = state_db?;
+                    let thread_id = ThreadId::from_string(session_id.as_str()).ok()?;
+                    goal_service
+                        .get_thread_goal(&state_db, thread_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|goal| WorkGoalState {
+                            objective: goal.objective,
+                            status: brine_work_status_from_goal_status(goal.status),
+                        })
+                })
+            }),
         );
     }
     if let Some(queue_service) = queue_service {
@@ -147,6 +168,21 @@ pub(crate) fn thread_extensions(
         },
     );
     Arc::new(builder.build())
+}
+
+fn brine_work_status_from_goal_status(
+    status: codex_protocol::protocol::ThreadGoalStatus,
+) -> WorkStatus {
+    use codex_protocol::protocol::ThreadGoalStatus;
+
+    match status {
+        ThreadGoalStatus::Active => WorkStatus::Active,
+        ThreadGoalStatus::Complete => WorkStatus::Complete,
+        ThreadGoalStatus::Paused
+        | ThreadGoalStatus::Blocked
+        | ThreadGoalStatus::UsageLimited
+        | ThreadGoalStatus::BudgetLimited => WorkStatus::Paused,
+    }
 }
 
 fn brine_runtime_authority_address() -> Option<SocketAddr> {
@@ -351,6 +387,29 @@ mod tests {
     use crate::thread_state::ConnectionCapabilities;
 
     use super::*;
+
+    #[test]
+    fn brine_work_status_preserves_goal_terminal_semantics() {
+        assert_eq!(
+            brine_work_status_from_goal_status(ThreadGoalStatus::Active),
+            WorkStatus::Active
+        );
+        assert_eq!(
+            brine_work_status_from_goal_status(ThreadGoalStatus::Complete),
+            WorkStatus::Complete
+        );
+        for status in [
+            ThreadGoalStatus::Paused,
+            ThreadGoalStatus::Blocked,
+            ThreadGoalStatus::UsageLimited,
+            ThreadGoalStatus::BudgetLimited,
+        ] {
+            assert_eq!(
+                brine_work_status_from_goal_status(status),
+                WorkStatus::Paused
+            );
+        }
+    }
 
     #[tokio::test]
     async fn app_server_event_sink_uses_listener_fifo_for_goal_updates_warnings_and_clears() {

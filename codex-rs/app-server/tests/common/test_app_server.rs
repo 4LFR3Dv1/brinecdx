@@ -185,6 +185,7 @@ impl TestAppServer {
             args: vec![DISABLE_PLUGIN_STARTUP_TASKS_ARG.to_string()],
             exec_server_delay: None,
             mock_chatgpt_backend: false,
+            preserve_existing_codex_home_config: false,
         }
     }
 
@@ -1858,6 +1859,7 @@ pub struct TestAppServerBuilder {
     args: Vec<String>,
     exec_server_delay: Option<Duration>,
     mock_chatgpt_backend: bool,
+    preserve_existing_codex_home_config: bool,
 }
 
 enum TestAppServerEnvironment {
@@ -1868,6 +1870,15 @@ enum TestAppServerEnvironment {
 impl TestAppServerBuilder {
     pub fn with_mock_chatgpt_backend(mut self) -> Self {
         self.mock_chatgpt_backend = true;
+        self
+    }
+
+    /// Keeps an existing CODEX_HOME config.toml byte-for-byte unchanged.
+    ///
+    /// Live-only integration witnesses use this when they need the host AuthManager
+    /// while injecting test provider configuration through CLI overrides.
+    pub fn preserve_existing_codex_home_config(mut self) -> Self {
+        self.preserve_existing_codex_home_config = true;
         self
     }
 
@@ -1966,6 +1977,7 @@ impl TestAppServerBuilder {
             args,
             exec_server_delay,
             mock_chatgpt_backend,
+            preserve_existing_codex_home_config,
         } = self;
         let (codex_home, owned_codex_home) = match codex_home {
             Some(codex_home) => (codex_home, None),
@@ -1977,8 +1989,8 @@ impl TestAppServerBuilder {
                 )
             }
         };
-        let attribution_settings_server = if mock_chatgpt_backend
-            || codex_home.join("auth.json").is_file()
+        let attribution_settings_server = if !preserve_existing_codex_home_config
+            && (mock_chatgpt_backend || codex_home.join("auth.json").is_file())
         {
             let config_path = codex_home.join("config.toml");
             let config = std::fs::read_to_string(&config_path)?;

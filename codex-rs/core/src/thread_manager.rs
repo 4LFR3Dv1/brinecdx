@@ -393,6 +393,21 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
 /// `Arc` reference that can be downgraded to by `LocalAgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
+#[derive(Clone)]
+struct ProviderModelCatalog {
+    provider_id: String,
+    provider_name: String,
+    manager: SharedModelsManager,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoutedModelPreset {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub is_active_provider: bool,
+    pub preset: ModelPreset,
+}
+
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     shared_thread_instructions: shared_instructions::SharedThreadInstructionsProviders,
@@ -400,6 +415,8 @@ pub(crate) struct ThreadManagerState {
     thread_id_generator: ThreadIdGenerator,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
+    default_model_provider_id: String,
+    provider_model_catalogs: Vec<ProviderModelCatalog>,
     git_root_discovery: Arc<GitRootDiscovery>,
     environment_manager: Arc<EnvironmentManager>,
     starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
@@ -419,6 +436,66 @@ pub(crate) struct ThreadManagerState {
     analytics_events_client: Option<AnalyticsEventsClient>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
+}
+
+fn include_provider_in_global_model_picker(
+    provider_id: &str,
+    provider: &ModelProviderInfo,
+    active_provider_id: &str,
+) -> bool {
+    provider_id == OPENAI_PROVIDER_ID
+        || provider_id == active_provider_id
+        || provider.env_key.is_some()
+        || provider.model_catalog_url.is_some()
+        || provider.experimental_bearer_token.is_some()
+        || provider.auth.is_some()
+        || provider.gateway_oauth.is_some()
+}
+
+fn build_provider_model_catalogs(
+    config: &Config,
+    auth_manager: &Arc<AuthManager>,
+    active_models_manager: &SharedModelsManager,
+) -> Vec<ProviderModelCatalog> {
+    let mut provider_ids = config
+        .model_providers
+        .iter()
+        .filter(|(provider_id, provider)| {
+            include_provider_in_global_model_picker(
+                provider_id,
+                provider,
+                &config.model_provider_id,
+            )
+        })
+        .map(|(provider_id, _)| provider_id.clone())
+        .collect::<Vec<_>>();
+    provider_ids.sort();
+
+    provider_ids
+        .into_iter()
+        .filter_map(|provider_id| {
+            let provider_info = config.model_providers.get(&provider_id)?.clone();
+            let manager = if provider_id == config.model_provider_id {
+                active_models_manager.clone()
+            } else {
+                let provider =
+                    create_model_provider(provider_info.clone(), Some(Arc::clone(auth_manager)));
+                let manager = provider.models_manager(
+                    config.codex_home.to_path_buf(),
+                    /*config_model_catalog*/ None,
+                );
+                manager.set_api_key_model_discovery_enabled(
+                    config.features.enabled(Feature::ApiKeyModelDiscovery),
+                );
+                manager
+            };
+            Some(ProviderModelCatalog {
+                provider_id,
+                provider_name: provider_info.name,
+                manager,
+            })
+        })
+        .collect()
 }
 
 pub fn build_models_manager(
@@ -533,6 +610,8 @@ impl ThreadManager {
             Arc::clone(&extensions),
             codex_apps_tools_cache,
         ));
+        let provider_model_catalogs =
+            build_provider_model_catalogs(config, &auth_manager, &models_manager);
         let code_mode_session_provider: Arc<dyn CodeModeSessionProvider> =
             if config.features.enabled(Feature::CodeModeHost)
                 || config.code_mode.disable_in_process_fallback
@@ -548,6 +627,8 @@ impl ThreadManager {
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
                 models_manager,
+                default_model_provider_id: config.model_provider_id.clone(),
+                provider_model_catalogs,
                 git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
@@ -696,8 +777,15 @@ impl ThreadManager {
                 shared_thread_instructions: Default::default(),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
-                models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(codex_home, /*config_model_catalog*/ None),
+                models_manager: create_model_provider(provider.clone(), Some(auth_manager.clone()))
+                    .models_manager(codex_home.clone(), /*config_model_catalog*/ None),
+                default_model_provider_id: OPENAI_PROVIDER_ID.to_string(),
+                provider_model_catalogs: vec![ProviderModelCatalog {
+                    provider_id: OPENAI_PROVIDER_ID.to_string(),
+                    provider_name: provider.name.clone(),
+                    manager: create_model_provider(provider, Some(auth_manager.clone()))
+                        .models_manager(codex_home, /*config_model_catalog*/ None),
+                }],
                 git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
@@ -881,6 +969,29 @@ impl ThreadManager {
             .models_manager
             .list_models(refresh_strategy, http_client_factory)
             .await
+    }
+
+    pub async fn list_routed_models(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: codex_http_client::HttpClientFactory,
+    ) -> Vec<RoutedModelPreset> {
+        let mut routed = Vec::new();
+        for catalog in &self.state.provider_model_catalogs {
+            let models = catalog
+                .manager
+                .list_models(refresh_strategy, http_client_factory.clone())
+                .await;
+            let is_active_provider =
+                catalog.provider_id == self.state.default_model_provider_id;
+            routed.extend(models.into_iter().map(|preset| RoutedModelPreset {
+                provider_id: catalog.provider_id.clone(),
+                provider_name: catalog.provider_name.clone(),
+                is_active_provider,
+                preset,
+            }));
+        }
+        routed
     }
 
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
