@@ -70,7 +70,7 @@ pub(crate) async fn resolve_review_model(
     let turn = context.turn();
     let available_models = session
         .services
-        .models_manager
+        .models_manager()
         .list_models(
             codex_models_manager::manager::RefreshStrategy::Offline,
             turn.config.http_client_factory(),
@@ -92,7 +92,7 @@ pub(crate) async fn resolve_review_model(
             Arc::new(
                 session
                     .services
-                    .models_manager
+                    .models_manager()
                     .get_model_info(
                         review_model.model.as_str(),
                         &turn.config.to_models_manager_config(),
