@@ -64,6 +64,15 @@ $codexExe = Join-Path $debugDir 'codex.exe'
 $appServerExe = Join-Path $debugDir 'codex-app-server.exe'
 $runtimeExe = Join-Path $debugDir 'brine-runtime-server.exe'
 
+# Authentication is owned by the local Codex/AuthManager process, not by the
+# remote TUI transport. Route auth management commands directly to the bundled
+# Codex binary so `brinecdx login` / `brinecdx login status` do not inherit
+# --remote and get rejected by the CLI dispatcher.
+if ($args.Count -gt 0 -and ($args[0] -eq 'login' -or $args[0] -eq 'logout')) {
+    & $codexExe -c 'forced_login_method=chatgpt' @args
+    exit $LASTEXITCODE
+}
+
 $runtimeListener = Get-Listener -Port $runtimePort
 if (Assert-ExpectedListener -Listener $runtimeListener -ExpectedProcessName 'brine-runtime-server' -ExpectedExecutable $runtimeExe) {
     $runtimeProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($runtimeListener.OwningProcess)" -ErrorAction SilentlyContinue
@@ -80,7 +89,10 @@ if (-not (Assert-ExpectedListener -Listener $appServerListener -ExpectedProcessN
     $previousRuntimeAddress = $env:BRINECDX_RUNTIME_AUTHORITY_ADDR
     $env:BRINECDX_RUNTIME_AUTHORITY_ADDR = $runtimeAddress
     try {
-        Start-Process -FilePath $appServerExe -ArgumentList @('--listen', $appServerUrl) -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir 'app-server.stdout.log') -RedirectStandardError (Join-Path $logDir 'app-server.stderr.log') | Out-Null
+        # Daily BrineCDX uses first-party ChatGPT/AuthManager credentials for
+        # the built-in OpenAI provider. DeepSeek/custom-provider secrets remain
+        # independently scoped through their provider env_key settings.
+        Start-Process -FilePath $appServerExe -ArgumentList @('--listen', $appServerUrl, '-c', 'forced_login_method=chatgpt') -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir 'app-server.stdout.log') -RedirectStandardError (Join-Path $logDir 'app-server.stderr.log') | Out-Null
     } finally {
         if ($null -eq $previousRuntimeAddress) { Remove-Item Env:BRINECDX_RUNTIME_AUTHORITY_ADDR -ErrorAction SilentlyContinue } else { $env:BRINECDX_RUNTIME_AUTHORITY_ADDR = $previousRuntimeAddress }
     }
