@@ -782,7 +782,7 @@ impl ThreadManager {
                 default_model_provider_id: OPENAI_PROVIDER_ID.to_string(),
                 provider_model_catalogs: vec![ProviderModelCatalog {
                     provider_id: OPENAI_PROVIDER_ID.to_string(),
-                    provider_name: provider.name,
+                    provider_name: provider.name.clone(),
                     manager: create_model_provider(provider, Some(auth_manager.clone()))
                         .models_manager(codex_home, /*config_model_catalog*/ None),
                 }],
