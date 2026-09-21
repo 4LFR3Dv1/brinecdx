@@ -11,6 +11,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_model_provider::create_model_provider;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ModelPreset;
@@ -71,7 +72,13 @@ pub(crate) async fn prepare_agent_spawn_config(
     if !options.full_history_fork
         || (options.version == SpawnConfigVersion::V2 && options.role_name.is_some())
     {
-        apply_spawn_agent_role(session, &mut config, options.role_name).await?;
+        apply_spawn_agent_role(
+            session,
+            &mut config,
+            options.role_name,
+            &turn.config.model_provider_id,
+        )
+        .await?;
         if options.version == SpawnConfigVersion::V2
             && options.full_history_fork
             && config.developer_instructions.is_none()
@@ -81,7 +88,12 @@ pub(crate) async fn prepare_agent_spawn_config(
                 .clone_from(&turn.developer_instructions);
         }
     }
-    apply_spawn_agent_service_tier(session, &mut config).await?;
+    apply_spawn_agent_service_tier_for_parent_provider(
+        session,
+        &mut config,
+        &turn.config.model_provider_id,
+    )
+    .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
     // Remember an applied configured default so cold reload reapplies its restrictions.
@@ -254,27 +266,12 @@ async fn apply_requested_spawn_agent_model_overrides(
 
     if let Some(requested_model) = requested_model {
         let models_manager = if provider_changed {
-            // A cross-provider child must validate against the child provider's own catalog.
-            // Reusing the parent's active ModelsManager recreates the exact mixed-route failure
-            // R3.5 is designed to prevent.
-            let provider = create_model_provider(
-                config.model_provider.clone(),
-                Some(session.services.auth_manager.clone()),
-            );
-            let manager = provider.models_manager_without_cache(/*config_model_catalog*/ None);
-            manager
-                .refresh_available_models(
-                    RefreshStrategy::OnlineIfUncached,
-                    config.http_client_factory(),
-                )
-                .await
-                .map_err(|err| {
-                    format!(
-                        "Failed to load model catalog for subagent provider `{}`: {err}",
-                        config.model_provider_id
-                    )
-                })?;
-            manager
+            models_manager_for_spawn_config(
+                session,
+                config,
+                &turn.config.model_provider_id,
+            )
+            .await?
         } else {
             session.services.models_manager()
         };
@@ -322,6 +319,15 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
 ) -> Result<(), String> {
+    let provider_id = config.model_provider_id.clone();
+    apply_spawn_agent_service_tier_for_parent_provider(session, config, &provider_id).await
+}
+
+async fn apply_spawn_agent_service_tier_for_parent_provider(
+    session: &Session,
+    config: &mut Config,
+    parent_provider_id: &str,
+) -> Result<(), String> {
     let Some(service_tier) = session.services.agent_control.root_service_tier() else {
         config.service_tier = None;
         return Ok(());
@@ -334,9 +340,9 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     let model = config.model.clone().ok_or_else(|| {
         "spawn_agent could not resolve the child model for service tier validation".to_string()
     })?;
-    let model_info = session
-        .services
-        .models_manager()
+    let models_manager =
+        models_manager_for_spawn_config(session, config, parent_provider_id).await?;
+    let model_info = models_manager
         .get_model_info(model.as_str(), &config.to_models_manager_config())
         .await;
 
@@ -350,6 +356,7 @@ async fn apply_spawn_agent_role(
     session: &Session,
     config: &mut Config,
     role_name: Option<&str>,
+    parent_provider_id: &str,
 ) -> Result<(), String> {
     let previous_model = config.model.clone();
     let previous_reasoning_effort = config.model_reasoning_effort.clone();
@@ -365,9 +372,9 @@ async fn apply_spawn_agent_role(
     let model = config.model.clone().ok_or_else(|| {
         "spawn_agent could not resolve the child model for reasoning effort validation".to_string()
     })?;
-    let model_info = session
-        .services
-        .models_manager()
+    let models_manager =
+        models_manager_for_spawn_config(session, config, parent_provider_id).await?;
+    let model_info = models_manager
         .get_model_info(&model, &config.to_models_manager_config())
         .await;
     if model_info.used_fallback_model_metadata {
@@ -379,6 +386,42 @@ async fn apply_spawn_agent_role(
         &model_info.supported_reasoning_levels,
         &reasoning_effort,
     )
+}
+
+async fn models_manager_for_spawn_config(
+    session: &Session,
+    config: &Config,
+    parent_provider_id: &str,
+) -> Result<SharedModelsManager, String> {
+    if config.model_provider_id == parent_provider_id {
+        return Ok(session.services.models_manager());
+    }
+
+    let provider = create_model_provider(
+        config.model_provider.clone(),
+        Some(session.services.auth_manager.clone()),
+    );
+    let manager = provider.models_manager_without_cache(/*config_model_catalog*/ None);
+
+    // First-party OpenAI has a bundled authoritative baseline. Custom providers must
+    // discover their own catalog so a parent provider's models can never leak into
+    // child validation.
+    if !config.model_provider.is_openai() {
+        manager
+            .refresh_available_models(
+                RefreshStrategy::OnlineIfUncached,
+                config.http_client_factory(),
+            )
+            .await
+            .map_err(|err| {
+                format!(
+                    "Failed to load model catalog for subagent provider `{}`: {err}",
+                    config.model_provider_id
+                )
+            })?;
+    }
+
+    Ok(manager)
 }
 
 fn find_spawn_agent_model_name(
