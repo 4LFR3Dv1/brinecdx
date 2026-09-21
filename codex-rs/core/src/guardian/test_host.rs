@@ -28,7 +28,7 @@ pub(crate) fn install(session: &Session, config: &Config) {
     let manager = Arc::new(crate::ThreadManager::new(
         config,
         Arc::clone(&session.services.auth_manager),
-        Arc::clone(&session.services.models_manager),
+        session.services.models_manager(),
         crate::CodexAppsToolsCache::default(),
         SessionSource::Exec,
         session.services.turn_environments.environment_manager(),
