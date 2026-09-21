@@ -1,5 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::ensure;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
@@ -42,12 +43,164 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_case::test_case;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const LIVE_PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[tokio::test]
+#[ignore = "requires R35_LIVE_CODEX_HOME + DEEPSEEK_API_KEY and performs real provider calls"]
+async fn cognition_provider_live_round_trip_preserves_thread_identity() -> Result<()> {
+    let codex_home = std::env::var_os("R35_LIVE_CODEX_HOME")
+        .map(PathBuf::from)
+        .context("set R35_LIVE_CODEX_HOME to the CODEX_HOME that owns the OpenAI/ChatGPT login")?;
+    ensure!(
+        codex_home.is_dir(),
+        "R35_LIVE_CODEX_HOME does not exist: {}",
+        codex_home.display()
+    );
+    ensure!(
+        std::env::var_os("DEEPSEEK_API_KEY").is_some(),
+        "set DEEPSEEK_API_KEY in the process environment; the live witness never persists it"
+    );
+
+    let deepseek_model = std::env::var("R35_LIVE_DEEPSEEK_MODEL")
+        .unwrap_or_else(|_| "deepseek-flash".to_string());
+    let openai_model = std::env::var("R35_LIVE_OPENAI_MODEL")
+        .unwrap_or_else(|_| "gpt-5.6-sol".to_string());
+
+    let deepseek_provider = r#"{ name = "DeepSeek", base_url = "https://api.deepseek.com", env_key = "DEEPSEEK_API_KEY", supports_websockets = false }"#;
+    let args = vec![
+        "-c".to_string(),
+        "model_provider=deepseek".to_string(),
+        "-c".to_string(),
+        format!("model={deepseek_model}"),
+        "-c".to_string(),
+        format!("model_providers.deepseek={deepseek_provider}"),
+    ];
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(&codex_home)
+        .without_auto_env()
+        .without_managed_config()
+        .preserve_existing_codex_home_config()
+        .with_args(&arg_refs)
+        .build_initialized_with_timeout(LIVE_PROVIDER_TIMEOUT)
+        .await?;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some(deepseek_model.clone()),
+            ..Default::default()
+        })
+        .await?;
+    let started: ThreadStartResponse =
+        timeout(LIVE_PROVIDER_TIMEOUT, mcp.read_response(start_id)).await??;
+    let thread_id = started.thread.id.clone();
+
+    let first = timeout(
+        LIVE_PROVIDER_TIMEOUT,
+        mcp.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Reply exactly R35-DEEPSEEK-1. Do not call tools.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
+    ensure!(!first.turn.id.is_empty(), "DeepSeek first turn did not materialize");
+
+    let update_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            model_provider: Some("openai".to_string()),
+            model: Some(openai_model.clone()),
+            effort: Some(ReasoningEffort::Medium),
+            ..Default::default()
+        })
+        .await?;
+    let _: ThreadSettingsUpdateResponse =
+        timeout(LIVE_PROVIDER_TIMEOUT, mcp.read_response(update_id)).await??;
+    let switched: ThreadSettingsUpdatedNotification =
+        timeout(LIVE_PROVIDER_TIMEOUT, mcp.read_notification("thread/settings/updated")).await??;
+    assert_eq!(switched.thread_id, thread_id);
+    assert_eq!(switched.thread_settings.model_provider, "openai");
+    assert_eq!(switched.thread_settings.model, openai_model);
+
+    let second = timeout(
+        LIVE_PROVIDER_TIMEOUT,
+        mcp.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Reply exactly R35-OPENAI-2. Do not call tools.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
+    ensure!(!second.turn.id.is_empty(), "OpenAI turn did not materialize");
+    assert_ne!(second.turn.id, first.turn.id);
+
+    let update_id = mcp
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            model_provider: Some("deepseek".to_string()),
+            model: Some(deepseek_model.clone()),
+            effort: Some(ReasoningEffort::Medium),
+            ..Default::default()
+        })
+        .await?;
+    let _: ThreadSettingsUpdateResponse =
+        timeout(LIVE_PROVIDER_TIMEOUT, mcp.read_response(update_id)).await??;
+    let returned: ThreadSettingsUpdatedNotification =
+        timeout(LIVE_PROVIDER_TIMEOUT, mcp.read_notification("thread/settings/updated")).await??;
+    assert_eq!(returned.thread_id, thread_id);
+    assert_eq!(returned.thread_settings.model_provider, "deepseek");
+    assert_eq!(returned.thread_settings.model, deepseek_model);
+
+    let third = timeout(
+        LIVE_PROVIDER_TIMEOUT,
+        mcp.start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Reply exactly R35-DEEPSEEK-3. Do not call tools.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await??;
+    ensure!(!third.turn.id.is_empty(), "DeepSeek return turn did not materialize");
+    assert_ne!(third.turn.id, second.turn.id);
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread_id.clone(),
+            include_turns: true,
+        })
+        .await?;
+    let read: ThreadReadResponse =
+        timeout(LIVE_PROVIDER_TIMEOUT, mcp.read_response(read_id)).await??;
+    assert_eq!(read.thread.id, thread_id);
+    assert_eq!(read.thread.turns.len(), 3);
+
+    eprintln!(
+        "R3.5 LIVE WITNESS PASS thread_id={thread_id} turns={}/{}/{} route=deepseek:{deepseek_model}->openai:{openai_model}->deepseek:{deepseek_model}",
+        first.turn.id,
+        second.turn.id,
+        third.turn.id,
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn cognition_provider_round_trip_preserves_thread_identity() -> Result<()> {
