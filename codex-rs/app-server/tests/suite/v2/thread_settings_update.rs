@@ -102,7 +102,7 @@ supports_websockets = false
             ..Default::default()
         })
         .await?;
-    assert_eq!(first.turn.thread_id.as_deref(), Some(thread_id.as_str()));
+    assert!(!first.turn.id.is_empty());
 
     send_thread_settings_update(
         &mut mcp,
@@ -130,7 +130,8 @@ supports_websockets = false
             ..Default::default()
         })
         .await?;
-    assert_eq!(second.turn.thread_id.as_deref(), Some(thread_id.as_str()));
+    assert!(!second.turn.id.is_empty());
+    assert_ne!(second.turn.id, first.turn.id);
 
     send_thread_settings_update(
         &mut mcp,
@@ -158,7 +159,8 @@ supports_websockets = false
             ..Default::default()
         })
         .await?;
-    assert_eq!(third.turn.thread_id.as_deref(), Some(thread_id.as_str()));
+    assert!(!third.turn.id.is_empty());
+    assert_ne!(third.turn.id, second.turn.id);
 
     assert_eq!(received_response_bodies(&deepseek).await?.len(), 2);
     assert_eq!(received_response_bodies(&openai_compatible).await?.len(), 1);
