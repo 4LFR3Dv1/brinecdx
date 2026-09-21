@@ -3828,6 +3828,22 @@ impl Config {
             .agents
             .as_ref()
             .and_then(|agents| agents.default_subagent_reasoning_effort.clone());
+        if let Some(provider_id) = agent_default_subagent_provider.as_deref() {
+            if agent_default_subagent_model.is_none() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "agents.default_subagent_provider requires agents.default_subagent_model",
+                ));
+            }
+            if !model_providers.contains_key(provider_id) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "agents.default_subagent_provider references unknown provider `{provider_id}`"
+                    ),
+                ));
+            }
+        }
         let agent_interrupt_message_enabled = cfg
             .agents
             .as_ref()
