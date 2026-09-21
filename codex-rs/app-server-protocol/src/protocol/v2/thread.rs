@@ -257,6 +257,10 @@ pub struct ThreadSettingsUpdateParams {
     #[experimental("thread/settings/update.permissions")]
     #[ts(optional = nullable)]
     pub permissions: Option<String>,
+    /// Override the model provider for subsequent turns.
+    /// The provider must exist in the effective configured provider registry.
+    #[ts(optional = nullable)]
+    pub model_provider: Option<String>,
     /// Override the model for subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
