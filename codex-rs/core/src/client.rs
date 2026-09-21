@@ -560,7 +560,7 @@ impl ModelClient {
             provider_info,
             self.state.session_source.clone(),
             self.state.originator.clone(),
-            self.state.model_verbosity,
+            self.state.model_verbosity.clone(),
             self.state.content_item_kinds_enabled,
             self.state.reasoning_effort_override_enabled,
             self.state.enable_request_compression,
