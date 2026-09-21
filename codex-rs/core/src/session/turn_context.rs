@@ -1174,10 +1174,11 @@ impl Session {
             .map(TurnEnvironment::permission_profile)
             .cloned()
             .unwrap_or_else(|| session_configuration.permission_profile());
+        let models_manager = self.services.models_manager();
         let model_info = session_configuration
             .step_settings
             .resolve_model_info(
-                self.services.models_manager().as_ref(),
+                models_manager.as_ref(),
                 &session_configuration.model_info_overrides,
             )
             .await;
