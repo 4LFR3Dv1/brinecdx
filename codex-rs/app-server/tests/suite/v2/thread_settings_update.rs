@@ -171,8 +171,7 @@ supports_websockets = false
             include_turns: true,
         })
         .await?;
-    let read: ThreadReadResponse =
-        timeout(DEFAULT_TIMEOUT, mcp.read_response(read_id)).await??;
+    let read: ThreadReadResponse = timeout(DEFAULT_TIMEOUT, mcp.read_response(read_id)).await??;
     assert_eq!(read.thread.id, thread_id);
     assert_eq!(read.thread.turns.len(), 3);
 
