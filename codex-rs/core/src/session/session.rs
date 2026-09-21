@@ -99,6 +99,8 @@ pub(crate) struct Session {
 
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
+    /// Stable config key for the currently selected cognition provider.
+    pub(super) model_provider_id: String,
     /// Runtime provider and its provider-specific execution policy.
     pub(super) provider: SharedModelProvider,
 
@@ -271,7 +273,7 @@ impl SessionConfiguration {
             .unwrap_or_else(|| self.permission_profile_state.snapshot());
         ThreadConfigSnapshot {
             model: self.step_settings.collaboration_mode.model().to_string(),
-            model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
+            model_provider_id: self.model_provider_id.clone(),
             service_tier: self.step_settings.service_tier.clone(),
             approval_policy: self.step_settings.approval_policy.value(),
             approvals_reviewer: self.step_settings.approvals_reviewer,
@@ -312,7 +314,7 @@ impl SessionConfiguration {
     ) -> ThreadSettingsSnapshot {
         ThreadSettingsSnapshot {
             model: self.step_settings.collaboration_mode.model().to_string(),
-            model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
+            model_provider_id: self.model_provider_id.clone(),
             service_tier: self.step_settings.service_tier.clone(),
             approval_policy: self.step_settings.approval_policy.value(),
             approvals_reviewer: self.step_settings.approvals_reviewer,
@@ -349,6 +351,7 @@ impl SessionConfiguration {
             permission_profile: Some(self.permission_profile()),
             active_permission_profile: self.active_permission_profile(),
             windows_sandbox_level: Some(self.windows_sandbox_level),
+            model_provider: Some(self.model_provider_id.clone()),
             summary: self.step_settings.reasoning_summary,
             service_tier: Some(self.step_settings.service_tier.clone()),
             collaboration_mode: Some(self.step_settings.collaboration_mode.clone()),
@@ -394,6 +397,30 @@ impl SessionConfiguration {
         current_environments: &[TurnEnvironmentSelection],
     ) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
+        if let Some(model_provider_id) = updates.model_provider.as_ref() {
+            let provider_info = self
+                .original_config_do_not_use
+                .model_providers
+                .get(model_provider_id)
+                .cloned()
+                .ok_or_else(|| ConstraintError::InvalidValue {
+                    field_name: "model_provider",
+                    candidate: model_provider_id.clone(),
+                    allowed: self
+                        .original_config_do_not_use
+                        .model_providers
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    requirement_source: codex_config::RequirementSource::Unknown,
+                })?;
+            let mut config = (*next_configuration.original_config_do_not_use).clone();
+            config.model_provider_id = model_provider_id.clone();
+            config.model_provider = provider_info;
+            next_configuration.original_config_do_not_use = Arc::new(config);
+            next_configuration.model_provider_id = model_provider_id.clone();
+        }
         if let Some(disabled_plugin_ids) = &updates.disabled_plugin_ids {
             next_configuration.disabled_plugin_ids = disabled_plugin_ids.clone();
         }
@@ -590,6 +617,9 @@ pub(crate) struct SessionSettingsCommit {
 
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
+    /// Provider selection for subsequent turns. Credentials remain provider-owned
+    /// and are never copied into persisted thread settings.
+    pub(crate) model_provider: Option<String>,
     pub(crate) step_settings: StepSettingsUpdate,
     pub(crate) environments: Option<TurnEnvironmentSelections>,
     pub(crate) runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
