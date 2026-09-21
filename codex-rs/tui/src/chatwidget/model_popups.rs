@@ -335,6 +335,7 @@ impl ChatWidget {
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         let thread_id = self.thread_id();
         let sparkle_thread = self.sparkle_thread_for_picker_action(&model_for_action);
+        let route_changes_provider = provider_id_for_action != self.config.model_provider_id;
         vec![Box::new(move |tx| {
             if model_for_action == LUNA_RESERVE_MODEL {
                 // Reserve is temporary: update the active task without persisting a model default.
@@ -345,20 +346,31 @@ impl ChatWidget {
                     });
                 }
             } else if effort_for_action == Some(ReasoningEffortConfig::Ultra) {
-                tx.send(
+                let action = if route_changes_provider {
                     AstraModelPickerAction::ApplyAdvancedReasoningRoute {
                         provider_id: provider_id_for_action.clone(),
                         effort: ReasoningEffortConfig::Ultra,
                     }
-                    .into_picker_event(sparkle_thread, model_for_action.clone()),
-                );
+                } else {
+                    AstraModelPickerAction::ApplyAdvancedReasoning {
+                        effort: ReasoningEffortConfig::Ultra,
+                    }
+                };
+                tx.send(action.into_picker_event(sparkle_thread, model_for_action.clone()));
             } else if should_prompt_plan_mode_scope {
-                tx.send(AppEvent::OpenPlanReasoningScopePromptRoute {
-                    provider_id: provider_id_for_action.clone(),
-                    model: model_for_action.clone(),
-                    effort: effort_for_action.clone(),
-                });
-            } else {
+                if route_changes_provider {
+                    tx.send(AppEvent::OpenPlanReasoningScopePromptRoute {
+                        provider_id: provider_id_for_action.clone(),
+                        model: model_for_action.clone(),
+                        effort: effort_for_action.clone(),
+                    });
+                } else {
+                    tx.send(AppEvent::OpenPlanReasoningScopePrompt {
+                        model: model_for_action.clone(),
+                        effort: effort_for_action.clone(),
+                    });
+                }
+            } else if route_changes_provider {
                 tx.send(
                     AstraModelPickerAction::UpdateModelRoute {
                         provider_id: provider_id_for_action.clone(),
@@ -368,6 +380,16 @@ impl ChatWidget {
                 );
                 tx.send(AppEvent::PersistModelRouteSelection {
                     provider_id: provider_id_for_action.clone(),
+                    model: model_for_action.clone(),
+                    effort: effort_for_action.clone(),
+                });
+            } else {
+                tx.send(
+                    AstraModelPickerAction::UpdateModel
+                        .into_picker_event(sparkle_thread, model_for_action.clone()),
+                );
+                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action.clone()));
+                tx.send(AppEvent::PersistModelSelection {
                     model: model_for_action.clone(),
                     effort: effort_for_action.clone(),
                 });
