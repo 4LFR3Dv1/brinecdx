@@ -175,12 +175,7 @@ pub(crate) async fn run_turn(
     drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ true).await;
 
     let mut client_session = prewarmed_client_session.unwrap_or_else(|| {
-        sess.services
-            .model_client()
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-            .new_session()
+        sess.services.model_client().new_session()
     });
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
