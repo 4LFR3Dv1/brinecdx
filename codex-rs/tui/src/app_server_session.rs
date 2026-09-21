@@ -358,10 +358,19 @@ impl ThreadParamsMode {
         }
     }
 
-    fn model_provider_from_config(self, config: &Config) -> Option<String> {
+    fn model_route_from_config(
+        self,
+        config: &Config,
+    ) -> (Option<String>, Option<String>) {
         match self {
-            Self::Embedded => Some(config.model_provider_id.clone()),
-            Self::Remote => None,
+            Self::Embedded => (
+                config.model.clone(),
+                Some(config.model_provider_id.clone()),
+            ),
+            // The remote app-server owns new-thread model defaults. Never send
+            // a client-local model without its provider, because that can form
+            // an invalid mixed route when server and client defaults differ.
+            Self::Remote => (None, None),
         }
     }
 }
@@ -2092,9 +2101,10 @@ pub(crate) fn thread_start_params_from_config(
             )
         })
         .flatten();
+    let (model, model_provider) = thread_params_mode.model_route_from_config(config);
     ThreadStartParams {
-        model: config.model.clone(),
-        model_provider: thread_params_mode.model_provider_from_config(config),
+        model,
+        model_provider,
         service_tier: service_tier_override_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(config),
@@ -2150,10 +2160,9 @@ fn thread_resume_params_from_config(
         }
     }
     let (model, model_provider) = match model_settings {
-        ResumeModelSettings::OverrideFromCurrentConfig => (
-            config.model.clone(),
-            thread_params_mode.model_provider_from_config(&config),
-        ),
+        ResumeModelSettings::OverrideFromCurrentConfig => {
+            thread_params_mode.model_route_from_config(&config)
+        }
         ResumeModelSettings::RestoreFromThread | ResumeModelSettings::PreserveExistingThread => {
             (None, None)
         }
@@ -2202,10 +2211,11 @@ fn thread_fork_params_from_config(
             )
         })
         .flatten();
+    let (model, model_provider) = thread_params_mode.model_route_from_config(&config);
     ThreadForkParams {
         thread_id: thread_id.to_string(),
-        model: config.model.clone(),
-        model_provider: thread_params_mode.model_provider_from_config(&config),
+        model,
+        model_provider,
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(&config),
