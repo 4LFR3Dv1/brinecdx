@@ -415,6 +415,7 @@ pub(crate) struct ThreadManagerState {
     thread_id_generator: ThreadIdGenerator,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
+    default_model_provider_id: String,
     provider_model_catalogs: Vec<ProviderModelCatalog>,
     git_root_discovery: Arc<GitRootDiscovery>,
     environment_manager: Arc<EnvironmentManager>,
@@ -626,6 +627,7 @@ impl ThreadManager {
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
                 models_manager,
+                default_model_provider_id: config.model_provider_id.clone(),
                 provider_model_catalogs,
                 git_root_discovery: Arc::default(),
                 environment_manager,
@@ -777,6 +779,7 @@ impl ThreadManager {
                 thread_id_generator: default_thread_id_generator(),
                 models_manager: create_model_provider(provider.clone(), Some(auth_manager.clone()))
                     .models_manager(codex_home.clone(), /*config_model_catalog*/ None),
+                default_model_provider_id: OPENAI_PROVIDER_ID.to_string(),
                 provider_model_catalogs: vec![ProviderModelCatalog {
                     provider_id: OPENAI_PROVIDER_ID.to_string(),
                     provider_name: provider.name,
@@ -979,18 +982,8 @@ impl ThreadManager {
                 .manager
                 .list_models(refresh_strategy, http_client_factory.clone())
                 .await;
-            let is_active_provider = self
-                .state
-                .threads
-                .try_read()
-                .ok()
-                .and_then(|threads| threads.values().next().cloned())
-                .is_none();
-            // The process-level active catalog is the exact manager stored in
-            // state.models_manager. Pointer equality avoids coupling catalog
-            // identity to provider display names.
             let is_active_provider =
-                Arc::ptr_eq(&catalog.manager, &self.state.models_manager) || is_active_provider;
+                catalog.provider_id == self.state.default_model_provider_id;
             routed.extend(models.into_iter().map(|preset| RoutedModelPreset {
                 provider_id: catalog.provider_id.clone(),
                 provider_name: catalog.provider_name.clone(),
