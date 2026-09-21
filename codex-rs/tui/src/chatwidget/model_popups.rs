@@ -139,9 +139,10 @@ impl ChatWidget {
                             .any(|option| Self::is_advanced_reasoning_effort(&option.effort));
                 let actions: Vec<SelectionAction> = if requires_advanced_selection {
                     let preset_for_action = preset.clone();
+                    let provider_id_for_action = provider_id.clone();
                     vec![Box::new(move |tx| {
                         tx.send(AppEvent::OpenReasoningPopup {
-                            provider_id: provider_id.clone(),
+                            provider_id: provider_id_for_action.clone(),
                             model: preset_for_action.clone(),
                         });
                     })]
@@ -291,10 +292,11 @@ impl ChatWidget {
             .filter(|effort| !Self::is_advanced_reasoning_effort(effort));
             let single_supported_effort = direct_effort.is_some();
             let preset_for_action = preset.clone();
+            let provider_id_for_action = provider_id.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
-                    provider_id: provider_id.clone(),
+                    provider_id: provider_id_for_action.clone(),
                     model: preset_for_event,
                 });
             })];
