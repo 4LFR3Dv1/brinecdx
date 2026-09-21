@@ -1685,7 +1685,7 @@ impl Session {
                 )
                 .with_legacy_custom_ca_fallback(),
                 session_telemetry,
-                models_manager: Arc::clone(&models_manager),
+                models_manager: std::sync::RwLock::new(Arc::clone(&models_manager)),
                 git_root_discovery,
                 tool_approvals: Mutex::new(ApprovalStore::default()),
                 runtime_handle: tokio::runtime::Handle::current(),
@@ -1711,7 +1711,7 @@ impl Session {
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
                 time_provider,
-                model_client: ModelClient::new(
+                model_client: std::sync::RwLock::new(ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
                     if config.features.enabled(Feature::UseAgentIdentity) {
                         AgentIdentityAuthPolicy::ChatGptAuth
@@ -1747,7 +1747,7 @@ impl Session {
                     .or(fork_cache_key),
                     tx_event.clone(),
                     codex_responses_headers,
-                ),
+                )),
                 executed_tool_calls: executed_tool_calls.clone(),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(
                     thread_id,
