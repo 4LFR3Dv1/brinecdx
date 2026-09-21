@@ -50,6 +50,134 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
+async fn cognition_provider_round_trip_preserves_thread_identity() -> Result<()> {
+    let deepseek = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("deepseek-first")?,
+        create_final_assistant_message_sse_response("deepseek-return")?,
+    ])
+    .await;
+    let openai_compatible = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("openai-compatible")?,
+    ])
+    .await;
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+model_provider = "deepseek"
+model = "mock-model"
+compact_prompt = "compact"
+model_auto_compact_token_limit = 200000
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "{}/v1"
+supports_websockets = false
+
+[model_providers.openai-compatible]
+name = "OpenAI Compatible"
+base_url = "{}/v1"
+supports_websockets = false
+"#,
+            deepseek.uri(),
+            openai_compatible.uri(),
+        ),
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    let started = start_thread(&mut mcp).await?;
+    let thread_id = started.thread.id.clone();
+
+    let first = mcp
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "first provider".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(first.turn.thread_id.as_deref(), Some(thread_id.as_str()));
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            model_provider: Some("openai-compatible".to_string()),
+            model: Some("mock-model".to_string()),
+            effort: Some(ReasoningEffort::Low),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let switched = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(switched.thread_id, thread_id);
+    assert_eq!(switched.thread_settings.model_provider, "openai-compatible");
+    assert_eq!(switched.thread_settings.model, "mock-model");
+
+    let second = mcp
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "second provider".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(second.turn.thread_id.as_deref(), Some(thread_id.as_str()));
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            model_provider: Some("deepseek".to_string()),
+            model: Some("mock-model".to_string()),
+            effort: Some(ReasoningEffort::Medium),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let returned = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(returned.thread_id, thread_id);
+    assert_eq!(returned.thread_settings.model_provider, "deepseek");
+    assert_eq!(returned.thread_settings.model, "mock-model");
+
+    let third = mcp
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "return provider".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(third.turn.thread_id.as_deref(), Some(thread_id.as_str()));
+
+    assert_eq!(received_response_bodies(&deepseek).await?.len(), 2);
+    assert_eq!(received_response_bodies(&openai_compatible).await?.len(), 1);
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread_id.clone(),
+            include_turns: true,
+        })
+        .await?;
+    let read: ThreadReadResponse =
+        timeout(DEFAULT_TIMEOUT, mcp.read_response(read_id)).await??;
+    assert_eq!(read.thread.id, thread_id);
+    assert_eq!(read.thread.turns.len(), 3);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn disabled_plugin_ids_replace_preserve_and_clear_without_inference() -> Result<()> {
     let server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
