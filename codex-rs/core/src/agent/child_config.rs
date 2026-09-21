@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
+use codex_model_provider::create_model_provider;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::BaseInstructions;
@@ -201,17 +202,84 @@ async fn apply_requested_spawn_agent_model_overrides(
     requested_reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(), String> {
     let turn = step_context.turn.as_ref();
-    let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
+
+    // An explicit spawn model keeps the caller's current provider semantics. The configured
+    // default provider only participates when spawn_agent did not choose a model, so the
+    // configured provider + model + effort behave as one default cognition route.
+    let use_configured_default_route = requested_model.is_none();
+    let requested_provider = use_configured_default_route
+        .then(|| turn.config.agent_default_subagent_provider.as_deref())
+        .flatten();
+    let requested_model =
+        requested_model.or(turn.config.agent_default_subagent_model.as_deref());
     let requested_reasoning_effort = requested_reasoning_effort
         .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone());
-    if requested_model.is_none() && requested_reasoning_effort.is_none() {
+
+    if requested_provider.is_some() && requested_model.is_none() {
+        return Err(
+            "agents.default_subagent_provider requires agents.default_subagent_model so child cognition routing remains atomic"
+                .to_string(),
+        );
+    }
+
+    if requested_provider.is_none()
+        && requested_model.is_none()
+        && requested_reasoning_effort.is_none()
+    {
         return Ok(());
     }
 
+    let mut provider_changed = false;
+    if let Some(requested_provider) = requested_provider {
+        let provider_id = requested_provider.trim();
+        if provider_id.is_empty() {
+            return Err("agents.default_subagent_provider must not be empty".to_string());
+        }
+        let provider = config
+            .model_providers
+            .get(provider_id)
+            .cloned()
+            .ok_or_else(|| {
+                let mut available = config.model_providers.keys().cloned().collect::<Vec<_>>();
+                available.sort();
+                format!(
+                    "Unknown provider `{provider_id}` for default subagent route. Available providers: {}",
+                    available.join(", ")
+                )
+            })?;
+        provider_changed = config.model_provider_id != provider_id;
+        config.model_provider_id = provider_id.to_string();
+        config.model_provider = provider;
+    }
+
     if let Some(requested_model) = requested_model {
-        let available_models = session
-            .services
-            .models_manager()
+        let models_manager = if provider_changed {
+            // A cross-provider child must validate against the child provider's own catalog.
+            // Reusing the parent's active ModelsManager recreates the exact mixed-route failure
+            // R3.5 is designed to prevent.
+            let provider = create_model_provider(
+                config.model_provider.clone(),
+                Some(session.services.auth_manager.clone()),
+            );
+            let manager = provider.models_manager_without_cache(/*config_model_catalog*/ None);
+            manager
+                .refresh_available_models(
+                    RefreshStrategy::OnlineIfUncached,
+                    config.http_client_factory(),
+                )
+                .await
+                .map_err(|err| {
+                    format!(
+                        "Failed to load model catalog for subagent provider `{}`: {err}",
+                        config.model_provider_id
+                    )
+                })?;
+            manager
+        } else {
+            session.services.models_manager()
+        };
+
+        let available_models = models_manager
             .list_models(RefreshStrategy::Offline, config.http_client_factory())
             .await;
         let selected_model_name = find_spawn_agent_model_name(
@@ -219,9 +287,7 @@ async fn apply_requested_spawn_agent_model_overrides(
             requested_model,
             turn.multi_agent_version,
         )?;
-        let selected_model_info = session
-            .services
-            .models_manager()
+        let selected_model_info = models_manager
             .get_model_info(&selected_model_name, &config.to_models_manager_config())
             .await;
 
