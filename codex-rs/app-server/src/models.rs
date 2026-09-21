@@ -5,7 +5,7 @@ use codex_app_server_protocol::ModelServiceTier;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
-use codex_core::thread_manager::RoutedModelPreset;
+use codex_core::RoutedModelPreset;
 use codex_http_client::HttpClientFactory;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ReasoningEffortPreset;
