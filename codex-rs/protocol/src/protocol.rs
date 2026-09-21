@@ -492,6 +492,18 @@ pub struct ConversationSpeechParams {
 /// Supported sparse changes to one live task's current settings, regardless of
 /// task kind. Child sessions and consumers of frozen initial settings are unchanged.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Explicit cognition route for one thread/turn selection.
+///
+/// Provider identity is part of model identity: equal model slugs on different
+/// providers are not interchangeable execution routes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ModelRoute {
+    pub provider_id: String,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
+}
+
 pub struct TurnSettingsUpdate {
     /// Changes the reviewer for subsequent approval requests, not pending reviews.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
@@ -549,6 +561,10 @@ pub struct ThreadSettingsOverrides {
 
     /// Updated Windows sandbox mode for tool execution.
     pub windows_sandbox_level: Option<WindowsSandboxLevel>,
+
+    /// Updated model provider id. When set, subsequent turns route through
+    /// that configured provider without changing thread identity or history.
+    pub model_provider: Option<String>,
 
     /// Updated model slug. When set, the model info is derived automatically.
     pub model: Option<String>,
