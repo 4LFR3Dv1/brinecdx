@@ -89,6 +89,9 @@ async fn multi_provider_picker_groups_routes_and_preserves_provider_identity() {
     assert!(rendered.contains("deepseek · DeepSeek Chat"));
     assert!(rendered.contains("openai · GPT-5.5"));
 
+    // The picker preserves the active OpenAI route as the highlighted row.
+    // Move explicitly to the DeepSeek row to prove a cross-provider selection.
+    chat.handle_key_event(KeyCode::Up.into());
     chat.handle_key_event(KeyCode::Enter.into());
     let selected =
         assert_matches!(events.try_recv(), Ok(AppEvent::OpenReasoningPopup { model }) => model);
