@@ -704,6 +704,10 @@ pub struct AgentsToml {
     pub max_concurrent_threads_per_session: Option<usize>,
     /// Maximum nesting depth for V1 agent threads. Ignored by V2.
     pub max_depth: Option<i32>,
+    /// Default provider for spawned subagents when the spawn call does not select a model.
+    ///
+    /// Pair this with `default_subagent_model` so provider + model remain one cognition route.
+    pub default_subagent_provider: Option<String>,
     /// Default model for spawned subagents when the spawn call does not select one.
     pub default_subagent_model: Option<String>,
     /// Default reasoning effort for spawned subagents when the spawn call does not select one.
