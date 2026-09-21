@@ -882,11 +882,7 @@ impl ChatWidget {
     }
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
-        self.apply_model_route_and_effort(
-            self.config.model_provider_id.clone(),
-            model,
-            effort,
-        );
+        self.apply_model_route_and_effort(self.config.model_provider_id.clone(), model, effort);
     }
 
     fn apply_model_route_and_effort(
