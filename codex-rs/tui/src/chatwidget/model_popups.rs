@@ -462,6 +462,7 @@ impl ChatWidget {
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         let sparkle_thread = self.sparkle_thread_for_picker_action(&model);
 
+        let plan_only_provider_id = provider_id.clone();
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
             let effort = effort.clone();
@@ -469,7 +470,7 @@ impl ChatWidget {
             move |tx| {
                 tx.send(
                     AstraModelPickerAction::UpdateModelRoute {
-                        provider_id: provider_id.clone(),
+                        provider_id: plan_only_provider_id.clone(),
                         effort: None,
                     }
                     .into_picker_event(sparkle_thread, model.clone()),
