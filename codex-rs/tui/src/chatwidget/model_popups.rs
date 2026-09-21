@@ -11,7 +11,7 @@ pub(super) const MODEL_SELECTION_VIEW_ID: &str = "model-selection";
 pub(super) const ALL_MODELS_SELECTION_VIEW_ID: &str = "all-models-selection";
 
 impl ChatWidget {
-    fn provider_id_for_preset(&self, preset: &ModelPreset) -> String {
+    pub(super) fn provider_id_for_preset(&self, preset: &ModelPreset) -> String {
         preset
             .id
             .split_once("::")
