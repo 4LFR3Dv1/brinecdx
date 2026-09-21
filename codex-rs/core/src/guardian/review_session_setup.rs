@@ -97,7 +97,7 @@ impl PreparedGuardianContext {
         config.model_provider.supports_websockets &= self
             .parent
             .services
-            .model_client
+            .model_client()
             .responses_websocket_enabled();
         let options = crate::StartThreadOptions {
             internal_parent: Some(crate::thread_manager::InternalSessionParent {
