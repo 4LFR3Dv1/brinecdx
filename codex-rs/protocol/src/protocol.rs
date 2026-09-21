@@ -489,9 +489,6 @@ pub struct ConversationSpeechParams {
     pub text: String,
 }
 
-/// Supported sparse changes to one live task's current settings, regardless of
-/// task kind. Child sessions and consumers of frozen initial settings are unchanged.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// Explicit cognition route for one thread/turn selection.
 ///
 /// Provider identity is part of model identity: equal model slugs on different
@@ -504,6 +501,9 @@ pub struct ModelRoute {
     pub reasoning_effort: Option<ReasoningEffortConfig>,
 }
 
+/// Supported sparse changes to one live task's current settings, regardless of
+/// task kind. Child sessions and consumers of frozen initial settings are unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TurnSettingsUpdate {
     /// Changes the reviewer for subsequent approval requests, not pending reviews.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
