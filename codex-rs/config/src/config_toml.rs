@@ -1060,6 +1060,27 @@ mod tests {
     }
 
     #[test]
+    fn agents_accept_provider_qualified_default_subagent_route() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+[agents]
+default_subagent_provider = "openai"
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "high"
+"#,
+        )
+        .expect("provider-qualified default subagent route should deserialize");
+
+        let agents = config.agents.expect("agents config");
+        assert_eq!(agents.default_subagent_provider.as_deref(), Some("openai"));
+        assert_eq!(agents.default_subagent_model.as_deref(), Some("gpt-5.6-luna"));
+        assert_eq!(
+            agents.default_subagent_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+    }
+
+    #[test]
     fn forced_chatgpt_workspace_id_accepts_single_string() {
         let config: ConfigToml = toml::from_str(&format!(
             r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A}""#
