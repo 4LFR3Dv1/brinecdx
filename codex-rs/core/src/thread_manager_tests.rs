@@ -55,6 +55,32 @@ use wiremock::MockServer;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
+#[test]
+fn global_model_picker_keeps_custom_providers_without_surfacing_unused_builtins() {
+    let custom = ModelProviderInfo {
+        name: "DeepSeek".to_string(),
+        base_url: Some("https://api.deepseek.com".to_string()),
+        ..ModelProviderInfo::default()
+    };
+    assert!(include_provider_in_global_model_picker(
+        "deepseek",
+        &custom,
+        OPENAI_PROVIDER_ID,
+    ));
+
+    let unused_builtin = ModelProviderInfo::default();
+    assert!(!include_provider_in_global_model_picker(
+        OLLAMA_OSS_PROVIDER_ID,
+        &unused_builtin,
+        OPENAI_PROVIDER_ID,
+    ));
+    assert!(!include_provider_in_global_model_picker(
+        LMSTUDIO_OSS_PROVIDER_ID,
+        &unused_builtin,
+        OPENAI_PROVIDER_ID,
+    ));
+}
+
 struct ParentInstructionsProvider(codex_extension_api::Instructions);
 
 impl codex_extension_api::UserInstructionsProvider for ParentInstructionsProvider {
