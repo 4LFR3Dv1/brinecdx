@@ -99,7 +99,7 @@ impl Session {
         let selected_effort = settings.reasoning_effort().cloned();
         if !self
             .services
-            .model_client
+            .model_client()
             .reasoning_effort_override_enabled(&settings.model_info)
         {
             if usage == RequestEffortUsage::Sampling {
@@ -140,7 +140,7 @@ impl Session {
     ) -> Option<ReasoningEffort> {
         if !self
             .services
-            .model_client
+            .model_client()
             .reasoning_effort_override_enabled(&settings.model_info)
         {
             return None;

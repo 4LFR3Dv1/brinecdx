@@ -197,6 +197,10 @@ fn session_telemetry_for_request(
 #[derive(Debug)]
 struct ModelClientState {
     thread_id: ThreadId,
+    /// Root auth owner retained across provider switches. Provider construction
+    /// decides whether this auth applies (OpenAI/ChatGPT) or provider-local
+    /// credentials apply instead (for example an env-key provider).
+    auth_manager: Option<Arc<AuthManager>>,
     provider: SharedModelProvider,
     workspace_routing: WorkspaceRoutingContext,
     auth_env_telemetry: AuthEnvTelemetry,
@@ -487,7 +491,7 @@ impl ModelClient {
         http_client_factory: HttpClientFactory,
         workspace_routing: WorkspaceRoutingContext,
     ) -> Self {
-        let model_provider = create_model_provider(provider_info, auth_manager);
+        let model_provider = create_model_provider(provider_info, auth_manager.clone());
         let codex_api_key_env_enabled = model_provider
             .auth_manager()
             .as_ref()
@@ -508,6 +512,7 @@ impl ModelClient {
         Self {
             state: Arc::new(ModelClientState {
                 thread_id,
+                auth_manager,
                 provider: model_provider,
                 workspace_routing,
                 auth_env_telemetry,
@@ -539,6 +544,38 @@ impl ModelClient {
         self.state.reasoning_effort_override_enabled
             && self.state.provider.info().is_openai()
             && model_info.supports_reasoning_effort_updates
+    }
+
+    /// Rebinds future requests to a different configured provider while retaining
+    /// thread/session identity and host-owned request context.
+    ///
+    /// Provider-scoped transport state is intentionally reset: websocket caches,
+    /// HTTP fallback state, auth telemetry, and attestation capability belong to
+    /// the selected provider and must never leak across a route switch.
+    pub(crate) fn with_provider_info(&self, provider_info: ModelProviderInfo) -> Self {
+        let mut next = Self::new(
+            self.state.auth_manager.clone(),
+            self.agent_identity_policy.clone(),
+            self.state.thread_id,
+            provider_info,
+            self.state.session_source.clone(),
+            self.state.originator.clone(),
+            self.state.model_verbosity.clone(),
+            self.state.content_item_kinds_enabled,
+            self.state.reasoning_effort_override_enabled,
+            self.state.enable_request_compression,
+            self.state.include_timing_metrics,
+            self.state.beta_features_header.clone(),
+            self.state.concurrent_reasoning_summaries_enabled,
+            self.state.attestation_provider.clone(),
+            self.http_client_factory.clone(),
+            self.state.workspace_routing.clone(),
+        );
+        next.prompt_cache_key_override = self.prompt_cache_key_override.clone();
+        next.codex_responses_headers = self.codex_responses_headers.clone();
+        next.event_sender = self.event_sender.clone();
+        next.restored_history = self.restored_history;
+        next
     }
 
     pub(crate) fn with_restored_history(mut self, restored_history: bool) -> Self {

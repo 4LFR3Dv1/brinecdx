@@ -64,6 +64,32 @@ impl App {
         }
     }
 
+    pub(super) fn active_thread_model_route_setting_update_params(
+        &self,
+        provider_id: String,
+        model: String,
+    ) -> Option<ThreadSettingsUpdateParams> {
+        let mut params = self.active_thread_model_setting_update_params(model)?;
+        params.model_provider = Some(provider_id);
+        Some(params)
+    }
+
+    pub(super) async fn sync_active_thread_model_route_setting(
+        &mut self,
+        app_server: &mut AppServerSession,
+        provider_id: String,
+        model: String,
+        effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    ) {
+        let Some(mut params) =
+            self.active_thread_model_route_setting_update_params(provider_id, model)
+        else {
+            return;
+        };
+        params.effort = effort;
+        self.send_thread_settings_update(app_server, params).await;
+    }
+
     pub(super) fn active_thread_model_setting_update_params(
         &self,
         model: String,

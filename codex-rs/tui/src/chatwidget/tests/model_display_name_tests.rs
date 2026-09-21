@@ -66,6 +66,58 @@ async fn custom_model_display_name_in_pickers_preserves_selection_slug() {
 }
 
 #[tokio::test]
+async fn multi_provider_picker_groups_routes_and_preserves_provider_identity() {
+    let (mut chat, mut events, _ops) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    let mut openai = get_available_model(&chat, "gpt-5.5");
+    openai.id = "openai::gpt-5.5".to_string();
+    openai.display_name = "GPT-5.5".to_string();
+
+    let mut deepseek = openai.clone();
+    deepseek.id = "deepseek::deepseek-chat".to_string();
+    deepseek.model = "deepseek-chat".to_string();
+    deepseek.display_name = "DeepSeek Chat".to_string();
+    deepseek.description = "DeepSeek cognition route".to_string();
+    deepseek.default_reasoning_effort = ReasoningEffortConfig::High;
+    deepseek.supported_reasoning_efforts = vec![ReasoningEffortPreset {
+        effort: ReasoningEffortConfig::High,
+        description: "Deep reasoning".to_string(),
+    }];
+
+    chat.model_catalog = Arc::new(ModelCatalog::new(vec![openai, deepseek.clone()]));
+    chat.open_all_models_popup();
+    let rendered = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(rendered.contains("deepseek · DeepSeek Chat"));
+    assert!(rendered.contains("openai · GPT-5.5"));
+
+    // The picker preserves the active OpenAI route as the highlighted row.
+    // Move explicitly to the DeepSeek row to prove a cross-provider selection.
+    chat.handle_key_event(KeyCode::Up.into());
+    chat.handle_key_event(KeyCode::Enter.into());
+    let selected =
+        assert_matches!(events.try_recv(), Ok(AppEvent::OpenReasoningPopup { model }) => model);
+    assert_eq!(selected.id, "deepseek::deepseek-chat");
+
+    chat.open_reasoning_popup(selected);
+    chat.handle_key_event(KeyCode::Enter.into());
+    assert_matches!(
+        events.try_recv(),
+        Ok(AppEvent::UpdateModelRoute {
+            provider_id,
+            model,
+            effort: Some(ReasoningEffortConfig::High),
+        }) if provider_id == "deepseek" && model == "deepseek-chat"
+    );
+    assert_matches!(
+        events.try_recv(),
+        Ok(AppEvent::PersistModelRouteSelection {
+            provider_id,
+            model,
+            effort: Some(ReasoningEffortConfig::High),
+        }) if provider_id == "deepseek" && model == "deepseek-chat"
+    );
+}
+
+#[tokio::test]
 async fn custom_model_display_name_in_status_line_and_fallback() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

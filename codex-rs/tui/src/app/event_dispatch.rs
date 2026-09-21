@@ -1792,6 +1792,47 @@ impl App {
                 self.update_luna_reserve_reasoning(app_server, thread_id, effort)
                     .await;
             }
+            AppEvent::UpdateModelRoute {
+                provider_id,
+                model,
+                effort,
+            } => {
+                if self
+                    .active_thread_model_route_setting_update_params(
+                        provider_id.clone(),
+                        model.clone(),
+                    )
+                    .is_some_and(|params| params.permissions.is_some())
+                    && self.reject_pending_permission_change()
+                {
+                    return Ok(AppRunControl::Continue);
+                }
+                let route_changed = self.chat_widget.current_model_provider_id() != provider_id
+                    || self.chat_widget.current_model() != model
+                    || self.chat_widget.current_collaboration_mode().model() != model;
+                if route_changed {
+                    if let Some(provider) = self.config.model_providers.get(&provider_id).cloned() {
+                        self.config.model_provider_id = provider_id.clone();
+                        self.config.model_provider = provider;
+                    }
+                    self.chat_widget.set_model_provider_id(&provider_id);
+                    self.chat_widget.set_model(&model);
+                    self.on_update_reasoning_effort(effort.clone());
+                    self.sync_active_thread_model_route_setting(
+                        app_server,
+                        provider_id,
+                        model,
+                        effort,
+                    )
+                    .await;
+                    self.sync_active_thread_service_tier_to_cached_session()
+                        .await;
+                } else {
+                    self.on_update_reasoning_effort(effort.clone());
+                    self.sync_active_thread_reasoning_setting(app_server, effort)
+                        .await;
+                }
+            }
             AppEvent::UpdateModel(model) => {
                 if self
                     .active_thread_model_setting_update_params(model.clone())
@@ -1926,6 +1967,79 @@ impl App {
             AppEvent::OpenAdvancedReasoningPopup { model } => {
                 self.chat_widget.open_advanced_reasoning_popup(model);
             }
+            AppEvent::ApplyAdvancedReasoningRoute {
+                provider_id,
+                model,
+                effort,
+            } => {
+                if self
+                    .active_thread_model_route_setting_update_params(
+                        provider_id.clone(),
+                        model.clone(),
+                    )
+                    .is_some_and(|params| params.permissions.is_some())
+                    && self.reject_pending_permission_change()
+                {
+                    return Ok(AppRunControl::Continue);
+                }
+                let route_changed = self.chat_widget.current_model_provider_id() != provider_id
+                    || self.chat_widget.current_model() != model
+                    || self.chat_widget.current_collaboration_mode().model() != model;
+                if let Some(provider) = self.config.model_providers.get(&provider_id).cloned() {
+                    self.config.model_provider_id = provider_id.clone();
+                    self.config.model_provider = provider;
+                }
+                self.chat_widget.set_model_provider_id(&provider_id);
+                let default_effort =
+                    self.on_apply_advanced_reasoning(model.as_str(), effort.clone());
+                if route_changed {
+                    self.sync_active_thread_model_route_setting(
+                        app_server,
+                        provider_id.clone(),
+                        model.clone(),
+                        Some(effort.clone()),
+                    )
+                    .await;
+                } else if let Some(mut params) =
+                    self.active_thread_reasoning_setting_update_params(Some(effort.clone()))
+                {
+                    params.collaboration_mode =
+                        Some(self.chat_widget.effective_collaboration_mode());
+                    self.send_thread_settings_update(app_server, params).await;
+                }
+                self.sync_active_thread_service_tier_to_cached_session()
+                    .await;
+
+                if let Some(default_effort) = default_effort.as_ref()
+                    && let Err(err) = self
+                        .persist_model_defaults(
+                            app_server.request_handle(),
+                            crate::config_update::build_model_route_selection_edits(
+                                provider_id.as_str(),
+                                model.as_str(),
+                                Some(default_effort),
+                            ),
+                            "default cognition provider, model, and reasoning effort",
+                        )
+                        .await
+                {
+                    let error = format_config_error(&err);
+                    tracing::error!(
+                        error = %error,
+                        "failed to persist conversation cognition route"
+                    );
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save default cognition route: {error}"
+                    ));
+                } else {
+                    self.chat_widget.add_info_message(
+                        format!(
+                            "Model changed to {provider_id}/{model} {effort} for this conversation"
+                        ),
+                        /*hint*/ None,
+                    );
+                }
+            }
             AppEvent::ApplyAdvancedReasoning { model, effort } => {
                 if self
                     .active_thread_model_setting_update_params(model.clone())
@@ -1976,6 +2090,17 @@ impl App {
                         /*hint*/ None,
                     );
                 }
+            }
+            AppEvent::OpenPlanReasoningScopePromptRoute {
+                provider_id,
+                model,
+                effort,
+            } => {
+                self.chat_widget.open_plan_reasoning_scope_prompt_for_route(
+                    provider_id,
+                    model,
+                    effort,
+                );
             }
             AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
                 self.chat_widget
@@ -2163,6 +2288,47 @@ impl App {
                     let _ = (preset, mode, profile_selection);
                 }
             }
+            AppEvent::PersistModelRouteSelection {
+                provider_id,
+                model,
+                effort,
+            } => {
+                match self
+                    .persist_model_defaults(
+                        app_server.request_handle(),
+                        crate::config_update::build_model_route_selection_edits(
+                            provider_id.as_str(),
+                            model.as_str(),
+                            effort.as_ref(),
+                        ),
+                        "default cognition provider, model, and reasoning effort",
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let effort_label = effort
+                            .as_ref()
+                            .map(std::string::ToString::to_string)
+                            .unwrap_or_else(|| "default".to_string());
+                        tracing::info!(
+                            "Selected provider: {provider_id}, model: {model}, effort: {effort_label}"
+                        );
+                        let mut message = format!("Model changed to {provider_id}/{model}");
+                        if let Some(label) = Self::reasoning_label_for(&model, effort.as_ref()) {
+                            message.push(' ');
+                            message.push_str(&label);
+                        }
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    }
+                    Err(err) => {
+                        let error = format_config_error(&err);
+                        tracing::error!(error = %error, "failed to persist cognition route");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save default cognition route: {error}"
+                        ));
+                    }
+                }
+            }
             AppEvent::PersistModelSelection { model, effort } => {
                 match self.persist_model_defaults(
                     app_server.request_handle(),
@@ -2197,6 +2363,14 @@ impl App {
                             .add_error_message(format!("Failed to save default model: {error}"));
                     }
                 }
+            }
+            AppEvent::SelectSessionModelRoute {
+                provider_id,
+                model,
+                effort,
+            } => {
+                self.select_session_model_route(app_server, provider_id, model, effort)
+                    .await;
             }
             AppEvent::SelectSessionModel { model, effort } => {
                 self.select_session_model(app_server, model, effort).await;

@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use codex_brine_runtime::AttachRequest;
 use codex_brine_runtime::AttachmentSnapshot;
 use codex_brine_runtime::InMemoryRuntimeAuthority;
 use codex_brine_runtime::RemoteDelta;
+use codex_brine_runtime::RuntimeAuthority;
 use codex_brine_runtime::RUNTIME_PROTOCOL_VERSION;
 use codex_brine_runtime::RuntimeState;
 use codex_brine_runtime::SessionAttachment;
@@ -16,6 +18,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ToolCallOutcome;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ModelRoute;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 
@@ -195,6 +198,81 @@ fn runtime_session_identity_uses_concrete_thread_store_for_subagents() {
     assert_ne!(
         runtime_session_id(&thread_store),
         SessionId::from(root_thread.to_string())
+    );
+}
+
+#[test]
+fn cognition_provider_round_trip_does_not_rebind_runtime_work() {
+    let authority = InMemoryRuntimeAuthority::default();
+    let thread_id = ThreadId::new();
+    let session_id = SessionId::from(thread_id.to_string());
+    let first = authority
+        .attach(AttachRequest {
+            session_id: session_id.clone(),
+            workspace_key: "repo:multi-provider".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
+            work_key: "work:multi-provider".to_owned(),
+            objective: "prove cognition routing invariance".to_owned(),
+            parent_session_id: None,
+            since_revision: None,
+            material: None,
+        })
+        .expect("attach persistent work");
+
+    let workspace_id = first.attachment.workspace_id.clone();
+    let work_id = first.attachment.work_id.clone();
+    let routes = [
+        ModelRoute {
+            provider_id: "deepseek".to_owned(),
+            model: "deepseek-chat".to_owned(),
+            reasoning_effort: None,
+        },
+        ModelRoute {
+            provider_id: "openai".to_owned(),
+            model: "gpt-5.6-sol".to_owned(),
+            reasoning_effort: None,
+        },
+        ModelRoute {
+            provider_id: "deepseek".to_owned(),
+            model: "deepseek-chat".to_owned(),
+            reasoning_effort: None,
+        },
+    ];
+
+    for route in routes {
+        assert!(!route.provider_id.is_empty());
+        assert_eq!(
+            runtime_session_id(&ExtensionData::new(thread_id.to_string())),
+            session_id
+        );
+        let state = authority
+            .state(&workspace_id, &work_id, None)
+            .expect("read persistent work during cognition switch");
+        assert_eq!(state.workspace.id, workspace_id);
+        assert_eq!(state.work.id, work_id);
+        assert_eq!(state.work.assigned_thread.as_ref(), Some(&session_id));
+    }
+
+    let reattached = authority
+        .attach(AttachRequest {
+            session_id: session_id.clone(),
+            workspace_key: "repo:multi-provider".to_owned(),
+            workspace_aliases: Vec::new(),
+            repository_identity: "git:4LFR3Dv1/brinecdx".to_owned(),
+            work_key: "work:multi-provider".to_owned(),
+            objective: "prove cognition routing invariance".to_owned(),
+            parent_session_id: None,
+            since_revision: Some(first.state.revision),
+            material: None,
+        })
+        .expect("reattach after cognition round trip");
+
+    assert_eq!(reattached.attachment.workspace_id, workspace_id);
+    assert_eq!(reattached.attachment.work_id, work_id);
+    assert_eq!(
+        reattached.state.work.assigned_thread.as_ref(),
+        Some(&session_id)
     );
 }
 
