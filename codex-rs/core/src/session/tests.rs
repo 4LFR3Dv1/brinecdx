@@ -4752,7 +4752,6 @@ async fn session_settings_legacy_fast_service_tier_update_uses_priority_request_
 }
 
 pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
-        model_provider_id: config.model_provider_id.clone(),
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;
     let config = Arc::new(config);
