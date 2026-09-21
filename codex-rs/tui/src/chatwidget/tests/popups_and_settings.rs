@@ -3471,7 +3471,10 @@ async fn model_picker_refresh_preserves_highlight() {
         }
         while rx.try_recv().is_ok() {}
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-        let selected = assert_matches!(rx.try_recv(), Ok(AppEvent::OpenReasoningPopup { model }) => model.model);
+        let selected = assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::OpenReasoningPopup { provider_id: _, model }) => model.model
+        );
         assert_eq!(selected, expected);
     }
 }
@@ -3525,9 +3528,11 @@ async fn model_picker_refresh_preserves_dismissal_and_reasoning_submenu() {
             chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
         } else {
             chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-            let model =
-                assert_matches!(rx.try_recv(), Ok(AppEvent::OpenReasoningPopup { model }) => model);
-            chat.open_reasoning_popup(model);
+            let (provider_id, model) = assert_matches!(
+                rx.try_recv(),
+                Ok(AppEvent::OpenReasoningPopup { provider_id, model }) => (provider_id, model)
+            );
+            chat.open_reasoning_popup_for_route(provider_id, model);
         }
         let before = render_bottom_popup(&chat, /*width*/ 80);
 
@@ -3795,18 +3800,23 @@ async fn select_ultra_with_multi_agent_thread_limit(max_threads: usize) -> (bool
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let advanced_preset = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
-        AppEvent::OpenAdvancedReasoningPopup { model } => Some(model),
-        _ => None,
-    });
-    chat.open_advanced_reasoning_popup(advanced_preset.expect("advanced reasoning popup"));
+    let advanced_route =
+        std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+            AppEvent::OpenAdvancedReasoningPopup { provider_id, model } => {
+                Some((provider_id, model))
+            }
+            _ => None,
+        });
+    let (provider_id, advanced_preset) =
+        advanced_route.expect("advanced reasoning popup");
+    chat.open_advanced_reasoning_popup_for_route(provider_id, advanced_preset);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let mut selected_ultra = false;
     let mut warnings = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event {
-            AppEvent::ApplyAdvancedReasoning {
+            AppEvent::ApplyAdvancedReasoningRoute {
                 effort: ReasoningEffortConfig::Ultra,
                 ..
             } => {
@@ -3858,19 +3868,24 @@ async fn max_reasoning_selection_persists_model_selection() {
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(events.iter().any(|event| matches!(
         event,
-        AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Max))
+        AppEvent::UpdateModelRoute {
+            provider_id,
+            model,
+            effort: Some(ReasoningEffortConfig::Max),
+        } if provider_id == "openai" && model == "gpt-5.5"
     )));
     assert!(events.iter().any(|event| matches!(
         event,
-        AppEvent::PersistModelSelection {
+        AppEvent::PersistModelRouteSelection {
+            provider_id,
             model,
             effort: Some(ReasoningEffortConfig::Max),
-        } if model == "gpt-5.5"
+        } if provider_id == "openai" && model == "gpt-5.5"
     )));
     assert!(
         events
             .iter()
-            .all(|event| !matches!(event, AppEvent::ApplyAdvancedReasoning { .. }))
+            .all(|event| !matches!(event, AppEvent::ApplyAdvancedReasoningRoute { .. }))
     );
 }
 
