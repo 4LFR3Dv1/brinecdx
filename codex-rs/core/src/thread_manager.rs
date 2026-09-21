@@ -404,6 +404,7 @@ struct ProviderModelCatalog {
 pub struct RoutedModelPreset {
     pub provider_id: String,
     pub provider_name: String,
+    pub is_active_provider: bool,
     pub preset: ModelPreset,
 }
 
@@ -978,9 +979,22 @@ impl ThreadManager {
                 .manager
                 .list_models(refresh_strategy, http_client_factory.clone())
                 .await;
+            let is_active_provider = self
+                .state
+                .threads
+                .try_read()
+                .ok()
+                .and_then(|threads| threads.values().next().cloned())
+                .is_none();
+            // The process-level active catalog is the exact manager stored in
+            // state.models_manager. Pointer equality avoids coupling catalog
+            // identity to provider display names.
+            let is_active_provider =
+                Arc::ptr_eq(&catalog.manager, &self.state.models_manager) || is_active_provider;
             routed.extend(models.into_iter().map(|preset| RoutedModelPreset {
                 provider_id: catalog.provider_id.clone(),
                 provider_name: catalog.provider_name.clone(),
+                is_active_provider,
                 preset,
             }));
         }
