@@ -103,3 +103,21 @@ pub(crate) struct SessionServices {
     pub(crate) tool_search_handler_cache: ToolSearchHandlerCache,
     pub(crate) turn_environments: Arc<ThreadEnvironments>,
 }
+
+impl SessionServices {
+    /// Snapshot the active provider's model manager without holding the lock across async work.
+    pub(crate) fn models_manager(&self) -> SharedModelsManager {
+        self.models_manager
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Snapshot the active provider's model client for one operation/turn.
+    pub(crate) fn model_client(&self) -> ModelClient {
+        self.model_client
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
