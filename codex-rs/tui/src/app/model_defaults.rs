@@ -33,10 +33,7 @@ impl App {
             || self.chat_widget.current_collaboration_mode().model() != model;
         if route_changed
             && self
-                .active_thread_model_route_setting_update_params(
-                    provider_id.clone(),
-                    model.clone(),
-                )
+                .active_thread_model_route_setting_update_params(provider_id.clone(), model.clone())
                 .is_some_and(|params| params.permissions.is_some())
             && self.reject_pending_permission_change()
         {
