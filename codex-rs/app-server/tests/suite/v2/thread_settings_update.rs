@@ -116,6 +116,7 @@ async fn cognition_provider_live_round_trip_preserves_thread_identity() -> Resul
     )
     .await??;
     ensure!(!first.turn.id.is_empty(), "DeepSeek first turn did not materialize");
+    ensure!(first.turn.error.is_none(), "DeepSeek first turn failed: {:?}", first.turn.error);
 
     let update_id = mcp
         .send_thread_settings_update_request(ThreadSettingsUpdateParams {
@@ -147,6 +148,7 @@ async fn cognition_provider_live_round_trip_preserves_thread_identity() -> Resul
     )
     .await??;
     ensure!(!second.turn.id.is_empty(), "OpenAI turn did not materialize");
+    ensure!(second.turn.error.is_none(), "OpenAI turn failed: {:?}", second.turn.error);
     assert_ne!(second.turn.id, first.turn.id);
 
     let update_id = mcp
@@ -179,6 +181,7 @@ async fn cognition_provider_live_round_trip_preserves_thread_identity() -> Resul
     )
     .await??;
     ensure!(!third.turn.id.is_empty(), "DeepSeek return turn did not materialize");
+    ensure!(third.turn.error.is_none(), "DeepSeek return turn failed: {:?}", third.turn.error);
     assert_ne!(third.turn.id, second.turn.id);
 
     let read_id = mcp
