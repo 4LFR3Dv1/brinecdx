@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 
 use crate::agent::LocalAgentControl;
 use crate::agents_md_manager::AgentsMdManager;
@@ -64,7 +65,8 @@ pub(crate) struct SessionServices {
     pub(crate) auth_manager: Arc<AuthManager>,
     /// Upload-only clients shared across turns without logging signed blob URLs.
     pub(crate) openai_file_upload_client_pool: RouteAwareClientPool,
-    pub(crate) models_manager: SharedModelsManager,
+    /// Active model catalog/metadata resolver for the provider selected for future turns.
+    pub(crate) models_manager: StdRwLock<SharedModelsManager>,
     pub(crate) git_root_discovery: Arc<GitRootDiscovery>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
@@ -93,8 +95,9 @@ pub(crate) struct SessionServices {
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) time_provider: Arc<dyn TimeProvider>,
-    /// Session-scoped model client shared across turns.
-    pub(crate) model_client: ModelClient,
+    /// Provider-scoped model client captured by each turn. Replacing this value
+    /// changes future turns without disturbing an already-running turn.
+    pub(crate) model_client: StdRwLock<ModelClient>,
     pub(crate) executed_tool_calls: ExecutedToolCalls,
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) tool_search_handler_cache: ToolSearchHandlerCache,
