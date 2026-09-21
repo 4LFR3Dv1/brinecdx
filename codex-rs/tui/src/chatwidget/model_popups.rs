@@ -103,7 +103,6 @@ impl ChatWidget {
             .filter(|preset| preset.show_in_picker)
             .collect();
 
-        let current_model = self.current_model();
         let current_label = presets
             .iter()
             .find(|preset| self.preset_is_current(preset))
