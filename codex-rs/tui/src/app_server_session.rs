@@ -367,10 +367,14 @@ impl ThreadParamsMode {
                 config.model.clone(),
                 Some(config.model_provider_id.clone()),
             ),
-            // The remote app-server owns new-thread model defaults. Never send
-            // a client-local model without its provider, because that can form
-            // an invalid mixed route when server and client defaults differ.
-            Self::Remote => (None, None),
+            // Remote model overrides must remain route-atomic as well. The
+            // previous single-provider path forwarded model while omitting
+            // model_provider, which can combine a client model with an
+            // unrelated server provider after multi-provider persistence.
+            Self::Remote => (
+                config.model.clone(),
+                Some(config.model_provider_id.clone()),
+            ),
         }
     }
 }
