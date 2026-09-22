@@ -2122,6 +2122,51 @@ fn load_model_catalog(
         .transpose()
 }
 
+fn load_provider_model_catalogs(
+    model_providers: &mut HashMap<String, ModelProviderInfo>,
+    codex_home: &AbsolutePathBuf,
+) -> std::io::Result<()> {
+    for (provider_id, provider) in model_providers.iter_mut() {
+        let Some(configured_path) = provider.model_catalog_json.as_ref() else {
+            continue;
+        };
+        let path = if configured_path.is_absolute() {
+            configured_path.clone()
+        } else {
+            codex_home.to_path_buf().join(configured_path)
+        };
+        let file_contents = std::fs::read_to_string(&path).map_err(|err| {
+            std::io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to read model_providers.{provider_id}.model_catalog_json `{}`: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        let catalog = serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to parse model_providers.{provider_id}.model_catalog_json `{}` as JSON: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        if catalog.models.is_empty() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "model_providers.{provider_id}.model_catalog_json `{}` must contain at least one model",
+                    path.display()
+                ),
+            ));
+        }
+        provider.model_catalog = Some(catalog);
+    }
+    Ok(())
+}
+
 fn filter_mcp_servers_by_requirements(
     mcp_servers: &mut HashMap<String, McpServerConfig>,
     mcp_requirements: Option<&Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -3734,9 +3779,10 @@ impl Config {
             .clone()
             .filter(|value| !value.is_empty());
 
-        let model_providers =
+        let mut model_providers =
             merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
                 .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
+        load_provider_model_catalogs(&mut model_providers, &codex_home)?;
 
         let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)
             .or(model_provider)

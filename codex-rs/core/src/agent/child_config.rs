@@ -401,12 +401,14 @@ async fn models_manager_for_spawn_config(
         config.model_provider.clone(),
         Some(session.services.auth_manager.clone()),
     );
-    let manager = provider.models_manager_without_cache(/*config_model_catalog*/ None);
+    let manager =
+        provider.models_manager_without_cache(config.model_provider.model_catalog.clone());
 
-    // First-party OpenAI has a bundled authoritative baseline. Custom providers must
-    // discover their own catalog so a parent provider's models can never leak into
-    // child validation.
-    if !config.model_provider.is_openai() {
+    // First-party OpenAI has a bundled authoritative baseline. Custom providers with a
+    // provider-local static catalog already have an authoritative snapshot; remaining
+    // custom providers must discover their own catalog so a parent provider's models
+    // can never leak into child validation.
+    if !config.model_provider.is_openai() && config.model_provider.model_catalog.is_none() {
         // ModelsManager intentionally exposes refresh through list_models rather than the
         // concrete OpenAiModelsManager refresh primitive. Trigger discovery here so later
         // Offline validation observes the child provider's catalog.

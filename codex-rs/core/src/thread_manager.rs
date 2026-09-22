@@ -501,7 +501,7 @@ fn build_provider_model_catalogs(
                     create_model_provider(provider_info.clone(), Some(Arc::clone(auth_manager)));
                 let manager = provider.models_manager(
                     config.codex_home.to_path_buf(),
-                    /*config_model_catalog*/ None,
+                    provider_info.model_catalog.clone(),
                 );
                 manager.set_api_key_model_discovery_enabled(
                     config.features.enabled(Feature::ApiKeyModelDiscovery),

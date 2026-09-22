@@ -15,6 +15,7 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::EnvVarError;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_utils_redacted_string::RedactedString;
 use http::HeaderMap;
 use http::header::HeaderName;
@@ -27,6 +28,7 @@ use std::fmt;
 use std::num::NonZeroU64;
 use std::path::Component;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::PoisonError;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -140,6 +142,13 @@ pub struct ModelProviderInfo {
     /// Optional full URL for a Codex-native model catalog. When unset, OpenAI discovery
     /// uses the Codex backend unless `base_url` overrides the inference endpoint.
     pub model_catalog_url: Option<RedactedString>,
+    /// Optional path to a Codex-native static model catalog for this provider.
+    /// Relative paths are resolved against CODEX_HOME during core config loading.
+    pub model_catalog_json: Option<PathBuf>,
+    /// Provider-local catalog materialized from `model_catalog_json` at startup.
+    /// Runtime-only so serialized provider configuration remains path-based.
+    #[serde(skip)]
+    pub model_catalog: Option<ModelsResponse>,
     /// Environment variable that stores the user's API key for this provider.
     pub env_key: Option<String>,
 
@@ -283,6 +292,12 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.model_catalog_json.is_some() && self.model_catalog_url.is_some() {
+            return Err(
+                "provider model_catalog_json cannot be combined with model_catalog_url"
+                    .to_string(),
+            );
+        }
         if let Some(gateway) = &self.gateway_oauth {
             gateway.validate(self)?;
         }
@@ -514,6 +529,8 @@ other non-default provider fields are not supported"
             name: OPENAI_PROVIDER_NAME.into(),
             base_url,
             model_catalog_url: None,
+            model_catalog_json: None,
+            model_catalog: None,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -559,6 +576,8 @@ other non-default provider fields are not supported"
             // endpoint override.
             base_url: None,
             model_catalog_url: None,
+            model_catalog_json: None,
+            model_catalog: None,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -740,6 +759,8 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         name: "gpt-oss".into(),
         base_url: Some(base_url.into()),
         model_catalog_url: None,
+        model_catalog_json: None,
+        model_catalog: None,
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,

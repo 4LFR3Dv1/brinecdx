@@ -81,6 +81,50 @@ fn global_model_picker_keeps_custom_providers_without_surfacing_unused_builtins(
     ));
 }
 
+#[tokio::test]
+async fn routed_model_catalog_uses_secondary_provider_static_catalog() {
+    let mut config = test_config().await;
+    let mut deepseek_model = codex_models_manager::bundled_models_response()
+        .expect("bundled model catalog")
+        .models
+        .into_iter()
+        .next()
+        .expect("at least one bundled model");
+    deepseek_model.slug = "deepseek-v4-pro".to_string();
+    deepseek_model.display_name = "DeepSeek-V4-Pro".to_string();
+
+    config.model_providers.insert(
+        "deepseek".to_string(),
+        ModelProviderInfo {
+            name: "deepseek".to_string(),
+            base_url: Some("https://api.deepseek.com/".to_string()),
+            model_catalog: Some(ModelsResponse {
+                models: vec![deepseek_model],
+            }),
+            ..Default::default()
+        },
+    );
+
+    let auth_manager = Arc::new(AuthManager::from_auth_for_testing(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    ));
+    let active_manager = build_models_manager(&config, Arc::clone(&auth_manager));
+    let catalogs = build_provider_model_catalogs(&config, &auth_manager, &active_manager);
+    let deepseek = catalogs
+        .iter()
+        .find(|catalog| catalog.provider_id == "deepseek")
+        .expect("deepseek routed catalog");
+
+    let models = deepseek
+        .manager
+        .list_models(RefreshStrategy::Offline, config.http_client_factory())
+        .await;
+    assert!(
+        models.iter().any(|model| model.model == "deepseek-v4-pro"),
+        "secondary provider static catalog should be visible to routed picker"
+    );
+}
+
 struct ParentInstructionsProvider(codex_extension_api::Instructions);
 
 impl codex_extension_api::UserInstructionsProvider for ParentInstructionsProvider {
