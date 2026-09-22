@@ -9,7 +9,9 @@ use crate::config::Config;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
+use codex_model_provider::create_model_provider;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ModelPreset;
@@ -70,7 +72,13 @@ pub(crate) async fn prepare_agent_spawn_config(
     if !options.full_history_fork
         || (options.version == SpawnConfigVersion::V2 && options.role_name.is_some())
     {
-        apply_spawn_agent_role(session, &mut config, options.role_name).await?;
+        apply_spawn_agent_role(
+            session,
+            &mut config,
+            options.role_name,
+            &turn.config.model_provider_id,
+        )
+        .await?;
         if options.version == SpawnConfigVersion::V2
             && options.full_history_fork
             && config.developer_instructions.is_none()
@@ -80,7 +88,12 @@ pub(crate) async fn prepare_agent_spawn_config(
                 .clone_from(&turn.developer_instructions);
         }
     }
-    apply_spawn_agent_service_tier(session, &mut config).await?;
+    apply_spawn_agent_service_tier_for_parent_provider(
+        session,
+        &mut config,
+        &turn.config.model_provider_id,
+    )
+    .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
     // Remember an applied configured default so cold reload reapplies its restrictions.
@@ -201,17 +214,69 @@ async fn apply_requested_spawn_agent_model_overrides(
     requested_reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(), String> {
     let turn = step_context.turn.as_ref();
-    let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
+
+    // An explicit spawn model keeps the caller's current provider semantics. The configured
+    // default provider only participates when spawn_agent did not choose a model, so the
+    // configured provider + model + effort behave as one default cognition route.
+    let use_configured_default_route = requested_model.is_none();
+    let requested_provider = use_configured_default_route
+        .then(|| turn.config.agent_default_subagent_provider.as_deref())
+        .flatten();
+    let requested_model =
+        requested_model.or(turn.config.agent_default_subagent_model.as_deref());
     let requested_reasoning_effort = requested_reasoning_effort
         .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone());
-    if requested_model.is_none() && requested_reasoning_effort.is_none() {
+
+    if requested_provider.is_some() && requested_model.is_none() {
+        return Err(
+            "agents.default_subagent_provider requires agents.default_subagent_model so child cognition routing remains atomic"
+                .to_string(),
+        );
+    }
+
+    if requested_provider.is_none()
+        && requested_model.is_none()
+        && requested_reasoning_effort.is_none()
+    {
         return Ok(());
     }
 
+    let mut provider_changed = false;
+    if let Some(requested_provider) = requested_provider {
+        let provider_id = requested_provider.trim();
+        if provider_id.is_empty() {
+            return Err("agents.default_subagent_provider must not be empty".to_string());
+        }
+        let provider = config
+            .model_providers
+            .get(provider_id)
+            .cloned()
+            .ok_or_else(|| {
+                let mut available = config.model_providers.keys().cloned().collect::<Vec<_>>();
+                available.sort();
+                format!(
+                    "Unknown provider `{provider_id}` for default subagent route. Available providers: {}",
+                    available.join(", ")
+                )
+            })?;
+        provider_changed = config.model_provider_id != provider_id;
+        config.model_provider_id = provider_id.to_string();
+        config.model_provider = provider;
+    }
+
     if let Some(requested_model) = requested_model {
-        let available_models = session
-            .services
-            .models_manager()
+        let models_manager = if provider_changed {
+            models_manager_for_spawn_config(
+                session,
+                config,
+                &turn.config.model_provider_id,
+            )
+            .await?
+        } else {
+            session.services.models_manager()
+        };
+
+        let available_models = models_manager
             .list_models(RefreshStrategy::Offline, config.http_client_factory())
             .await;
         let selected_model_name = find_spawn_agent_model_name(
@@ -219,9 +284,7 @@ async fn apply_requested_spawn_agent_model_overrides(
             requested_model,
             turn.multi_agent_version,
         )?;
-        let selected_model_info = session
-            .services
-            .models_manager()
+        let selected_model_info = models_manager
             .get_model_info(&selected_model_name, &config.to_models_manager_config())
             .await;
 
@@ -256,6 +319,15 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
 ) -> Result<(), String> {
+    let provider_id = config.model_provider_id.clone();
+    apply_spawn_agent_service_tier_for_parent_provider(session, config, &provider_id).await
+}
+
+async fn apply_spawn_agent_service_tier_for_parent_provider(
+    session: &Session,
+    config: &mut Config,
+    parent_provider_id: &str,
+) -> Result<(), String> {
     let Some(service_tier) = session.services.agent_control.root_service_tier() else {
         config.service_tier = None;
         return Ok(());
@@ -268,9 +340,9 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     let model = config.model.clone().ok_or_else(|| {
         "spawn_agent could not resolve the child model for service tier validation".to_string()
     })?;
-    let model_info = session
-        .services
-        .models_manager()
+    let models_manager =
+        models_manager_for_spawn_config(session, config, parent_provider_id).await?;
+    let model_info = models_manager
         .get_model_info(model.as_str(), &config.to_models_manager_config())
         .await;
 
@@ -284,6 +356,7 @@ async fn apply_spawn_agent_role(
     session: &Session,
     config: &mut Config,
     role_name: Option<&str>,
+    parent_provider_id: &str,
 ) -> Result<(), String> {
     let previous_model = config.model.clone();
     let previous_reasoning_effort = config.model_reasoning_effort.clone();
@@ -299,9 +372,9 @@ async fn apply_spawn_agent_role(
     let model = config.model.clone().ok_or_else(|| {
         "spawn_agent could not resolve the child model for reasoning effort validation".to_string()
     })?;
-    let model_info = session
-        .services
-        .models_manager()
+    let models_manager =
+        models_manager_for_spawn_config(session, config, parent_provider_id).await?;
+    let model_info = models_manager
         .get_model_info(&model, &config.to_models_manager_config())
         .await;
     if model_info.used_fallback_model_metadata {
@@ -313,6 +386,41 @@ async fn apply_spawn_agent_role(
         &model_info.supported_reasoning_levels,
         &reasoning_effort,
     )
+}
+
+async fn models_manager_for_spawn_config(
+    session: &Session,
+    config: &Config,
+    parent_provider_id: &str,
+) -> Result<SharedModelsManager, String> {
+    if config.model_provider_id == parent_provider_id {
+        return Ok(session.services.models_manager());
+    }
+
+    let provider = create_model_provider(
+        config.model_provider.clone(),
+        Some(session.services.auth_manager.clone()),
+    );
+    let manager =
+        provider.models_manager_without_cache(config.model_provider.model_catalog.clone());
+
+    // First-party OpenAI has a bundled authoritative baseline. Custom providers with a
+    // provider-local static catalog already have an authoritative snapshot; remaining
+    // custom providers must discover their own catalog so a parent provider's models
+    // can never leak into child validation.
+    if !config.model_provider.is_openai() && config.model_provider.model_catalog.is_none() {
+        // ModelsManager intentionally exposes refresh through list_models rather than the
+        // concrete OpenAiModelsManager refresh primitive. Trigger discovery here so later
+        // Offline validation observes the child provider's catalog.
+        let _ = manager
+            .list_models(
+                RefreshStrategy::OnlineIfUncached,
+                config.http_client_factory(),
+            )
+            .await;
+    }
+
+    Ok(manager)
 }
 
 fn find_spawn_agent_model_name(

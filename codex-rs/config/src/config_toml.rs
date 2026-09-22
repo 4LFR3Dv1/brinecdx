@@ -704,6 +704,10 @@ pub struct AgentsToml {
     pub max_concurrent_threads_per_session: Option<usize>,
     /// Maximum nesting depth for V1 agent threads. Ignored by V2.
     pub max_depth: Option<i32>,
+    /// Default provider for spawned subagents when the spawn call does not select a model.
+    ///
+    /// Pair this with `default_subagent_model` so provider + model remain one cognition route.
+    pub default_subagent_provider: Option<String>,
     /// Default model for spawned subagents when the spawn call does not select one.
     pub default_subagent_model: Option<String>,
     /// Default reasoning effort for spawned subagents when the spawn call does not select one.
@@ -1053,6 +1057,27 @@ mod tests {
                     .expect_err("idle timeout must be a nonnegative integer");
             assert!(error.to_string().contains("thread_unload_delay_secs"));
         }
+    }
+
+    #[test]
+    fn agents_accept_provider_qualified_default_subagent_route() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+[agents]
+default_subagent_provider = "openai"
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "high"
+"#,
+        )
+        .expect("provider-qualified default subagent route should deserialize");
+
+        let agents = config.agents.expect("agents config");
+        assert_eq!(agents.default_subagent_provider.as_deref(), Some("openai"));
+        assert_eq!(agents.default_subagent_model.as_deref(), Some("gpt-5.6-luna"));
+        assert_eq!(
+            agents.default_subagent_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
     }
 
     #[test]

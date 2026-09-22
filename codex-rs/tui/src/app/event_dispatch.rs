@@ -1961,11 +1961,13 @@ impl App {
                     self.sync_active_thread_service_tier_to_cached_session().await;
                 }
             }
-            AppEvent::OpenReasoningPopup { model } => {
-                self.chat_widget.open_reasoning_popup(model);
+            AppEvent::OpenReasoningPopup { provider_id, model } => {
+                self.chat_widget
+                    .open_reasoning_popup_for_route(provider_id, model);
             }
-            AppEvent::OpenAdvancedReasoningPopup { model } => {
-                self.chat_widget.open_advanced_reasoning_popup(model);
+            AppEvent::OpenAdvancedReasoningPopup { provider_id, model } => {
+                self.chat_widget
+                    .open_advanced_reasoning_popup_for_route(provider_id, model);
             }
             AppEvent::ApplyAdvancedReasoningRoute {
                 provider_id,

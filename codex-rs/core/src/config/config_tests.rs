@@ -77,6 +77,7 @@ use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::test_support::auth_manager_from_optional_auth;
 use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
@@ -8522,6 +8523,7 @@ async fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result
             enabled: None,
             max_concurrent_threads_per_session: None,
             max_depth: None,
+            default_subagent_provider: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
@@ -9473,6 +9475,7 @@ async fn load_config_resolves_agent_controls() -> std::io::Result<()> {
         agents: Some(AgentsToml {
             enabled: Some(false),
             max_depth: Some(2),
+            default_subagent_provider: None,
             default_subagent_model: Some("gpt-5.6-terra".to_string()),
             default_subagent_reasoning_effort: Some(ReasoningEffort::High),
             interrupt_message: Some(false),
@@ -9537,6 +9540,7 @@ async fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Res
             enabled: None,
             max_concurrent_threads_per_session: None,
             max_depth: None,
+            default_subagent_provider: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
@@ -9583,6 +9587,7 @@ async fn load_config_rejects_empty_agent_role_nickname_candidates() -> std::io::
             enabled: None,
             max_concurrent_threads_per_session: None,
             max_depth: None,
+            default_subagent_provider: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
@@ -9623,6 +9628,7 @@ async fn load_config_rejects_duplicate_agent_role_nickname_candidates() -> std::
             enabled: None,
             max_concurrent_threads_per_session: None,
             max_depth: None,
+            default_subagent_provider: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
@@ -9663,6 +9669,7 @@ async fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io:
             enabled: None,
             max_concurrent_threads_per_session: None,
             max_depth: None,
+            default_subagent_provider: None,
             default_subagent_model: None,
             default_subagent_reasoning_effort: None,
             job_max_runtime_seconds: None,
@@ -9719,6 +9726,48 @@ async fn model_catalog_json_loads_from_path() -> std::io::Result<()> {
     .await?;
 
     assert_eq!(config.model_catalog, Some(catalog));
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_model_catalog_json_loads_relative_to_codex_home() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let catalog_path = codex_home.path().join("deepseek-models.json");
+    let mut catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    catalog.models = catalog.models.into_iter().take(1).collect();
+    catalog.models[0].slug = "deepseek-v4-pro".to_string();
+    catalog.models[0].display_name = "DeepSeek-V4-Pro".to_string();
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_string(&catalog).expect("serialize catalog"),
+    )?;
+
+    let cfg = ConfigToml {
+        model_providers: HashMap::from([(
+            "deepseek".to_string(),
+            ModelProviderInfo {
+                name: "deepseek".to_string(),
+                base_url: Some("https://api.deepseek.com/".to_string()),
+                model_catalog_json: Some(std::path::PathBuf::from("deepseek-models.json")),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    let provider = config
+        .model_providers
+        .get("deepseek")
+        .expect("deepseek provider should be retained");
+    assert_eq!(provider.model_catalog, Some(catalog));
     Ok(())
 }
 

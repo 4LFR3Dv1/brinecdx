@@ -1220,11 +1220,13 @@ pub(crate) enum AppEvent {
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
+        provider_id: String,
         model: ModelPreset,
     },
 
     /// Open the explicit Max/Ultra reasoning selection popup for a model.
     OpenAdvancedReasoningPopup {
+        provider_id: String,
         model: ModelPreset,
     },
 

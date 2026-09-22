@@ -92,7 +92,18 @@ if (-not (Assert-ExpectedListener -Listener $appServerListener -ExpectedProcessN
         # Daily BrineCDX uses first-party ChatGPT/AuthManager credentials for
         # the built-in OpenAI provider. DeepSeek/custom-provider secrets remain
         # independently scoped through their provider env_key settings.
-        Start-Process -FilePath $appServerExe -ArgumentList @('--listen', $appServerUrl, '-c', 'forced_login_method=chatgpt') -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir 'app-server.stdout.log') -RedirectStandardError (Join-Path $logDir 'app-server.stderr.log') | Out-Null
+        #
+        # Root cognition remains user-selected, while unqualified spawned children
+        # default to the cheaper OpenAI Luna route. The provider is explicit so a
+        # parent running on another provider cannot accidentally produce a mixed route.
+        $appServerArgs = @(
+            '--listen', $appServerUrl,
+            '-c', 'forced_login_method=chatgpt',
+            '-c', 'agents.default_subagent_provider=openai',
+            '-c', 'agents.default_subagent_model=gpt-5.6-luna',
+            '-c', 'agents.default_subagent_reasoning_effort=high'
+        )
+        Start-Process -FilePath $appServerExe -ArgumentList $appServerArgs -WorkingDirectory $repoRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir 'app-server.stdout.log') -RedirectStandardError (Join-Path $logDir 'app-server.stderr.log') | Out-Null
     } finally {
         if ($null -eq $previousRuntimeAddress) { Remove-Item Env:BRINECDX_RUNTIME_AUTHORITY_ADDR -ErrorAction SilentlyContinue } else { $env:BRINECDX_RUNTIME_AUTHORITY_ADDR = $previousRuntimeAddress }
     }

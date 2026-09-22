@@ -50,7 +50,11 @@ use codex_login::CodexAuth;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use codex_login::default_client::originator;
 use codex_model_provider::create_model_provider;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
@@ -438,12 +442,27 @@ pub(crate) struct ThreadManagerState {
     ops_log: Option<SharedCapturedOps>,
 }
 
+fn is_builtin_provider_id(provider_id: &str) -> bool {
+    matches!(
+        provider_id,
+        OPENAI_PROVIDER_ID
+            | AMAZON_BEDROCK_PROVIDER_ID
+            | AMAZON_BEDROCK_RUNTIME_PROVIDER_ID
+            | OLLAMA_OSS_PROVIDER_ID
+            | LMSTUDIO_OSS_PROVIDER_ID
+    )
+}
+
 fn include_provider_in_global_model_picker(
     provider_id: &str,
     provider: &ModelProviderInfo,
     active_provider_id: &str,
 ) -> bool {
-    provider_id == OPENAI_PROVIDER_ID
+    // User-defined provider ids are explicit cognition configuration, even when they are
+    // not the active default. Built-ins, by contrast, are always present in the merged
+    // provider map and should not appear merely because Codex knows about them.
+    !is_builtin_provider_id(provider_id)
+        || provider_id == OPENAI_PROVIDER_ID
         || provider_id == active_provider_id
         || provider.env_key.is_some()
         || provider.model_catalog_url.is_some()
@@ -482,7 +501,7 @@ fn build_provider_model_catalogs(
                     create_model_provider(provider_info.clone(), Some(Arc::clone(auth_manager)));
                 let manager = provider.models_manager(
                     config.codex_home.to_path_buf(),
-                    /*config_model_catalog*/ None,
+                    provider_info.model_catalog.clone(),
                 );
                 manager.set_api_key_model_discovery_enabled(
                     config.features.enabled(Feature::ApiKeyModelDiscovery),

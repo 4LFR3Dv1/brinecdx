@@ -96,6 +96,8 @@ fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
 struct TestModelsEndpoint {
     has_command_auth: bool,
     uses_codex_backend: bool,
+    prefers_remote_catalog: bool,
+    uses_bundled_model_fallback: bool,
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     etag: Option<String>,
     fetch_count: AtomicUsize,
@@ -198,6 +200,8 @@ impl TestModelsEndpoint {
         Arc::new(Self {
             has_command_auth: false,
             uses_codex_backend: true,
+            prefers_remote_catalog: false,
+            uses_bundled_model_fallback: true,
             responses: Mutex::new(responses.into()),
             etag: None,
             fetch_count: AtomicUsize::new(0),
@@ -209,6 +213,21 @@ impl TestModelsEndpoint {
         Arc::new(Self {
             has_command_auth: false,
             uses_codex_backend: false,
+            prefers_remote_catalog: false,
+            uses_bundled_model_fallback: true,
+            responses: Mutex::new(responses.into()),
+            etag: None,
+            fetch_count: AtomicUsize::new(0),
+            observed_proxy_policy: Mutex::new(None),
+        })
+    }
+
+    fn custom_provider(responses: Vec<Vec<ModelInfo>>) -> Arc<Self> {
+        Arc::new(Self {
+            has_command_auth: false,
+            uses_codex_backend: false,
+            prefers_remote_catalog: true,
+            uses_bundled_model_fallback: false,
             responses: Mutex::new(responses.into()),
             etag: None,
             fetch_count: AtomicUsize::new(0),
@@ -288,6 +307,14 @@ impl ModelsEndpointClient for TestModelsEndpoint {
         self.has_command_auth
     }
 
+    fn prefers_remote_catalog(&self) -> bool {
+        self.prefers_remote_catalog
+    }
+
+    fn uses_bundled_model_fallback(&self) -> bool {
+        self.uses_bundled_model_fallback
+    }
+
     fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
         Box::pin(async { self.uses_codex_backend })
     }
@@ -346,6 +373,34 @@ where
 
 fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManager {
     StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
+}
+
+#[tokio::test]
+async fn custom_provider_uses_remote_catalog_without_openai_fallback() {
+    let codex_home = tempdir().expect("temp dir");
+    let remote = remote_model("deepseek-v4-pro", "DeepSeek V4 Pro", /*priority*/ 0);
+    let endpoint = TestModelsEndpoint::custom_provider(vec![vec![remote.clone()]]);
+    let manager = OpenAiModelsManager::new(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+        /*auth_manager*/ None,
+    );
+
+    assert!(
+        manager.get_remote_models().await.is_empty(),
+        "custom provider must not start with bundled OpenAI models"
+    );
+
+    manager
+        .refresh_available_models(
+            RefreshStrategy::OnlineIfUncached,
+            &DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await
+        .expect("custom provider catalog refresh");
+
+    assert_eq!(manager.get_remote_models().await, vec![remote]);
+    assert_eq!(endpoint.fetch_count(), 1);
 }
 
 #[tokio::test]

@@ -119,20 +119,13 @@ impl ChatWidget {
             .as_ref()
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         let sparkle_thread = self.sparkle_thread_for_picker_action(&model);
-        let route_changes_provider = provider_id != self.config.model_provider_id;
         Some(SelectionSecondaryAction {
             key,
             footer_hint: hints.into(),
             action: Box::new(move |tx| {
-                let action = if route_changes_provider {
-                    AstraModelPickerAction::SelectSessionModelRoute {
-                        provider_id: provider_id.clone(),
-                        effort: effort.clone(),
-                    }
-                } else {
-                    AstraModelPickerAction::SelectSessionModel {
-                        effort: effort.clone(),
-                    }
+                let action = AstraModelPickerAction::SelectSessionModelRoute {
+                    provider_id: provider_id.clone(),
+                    effort: effort.clone(),
                 };
                 tx.send(action.into_picker_event(sparkle_thread, model.clone()));
                 if let Some(warning) = warning.clone() {

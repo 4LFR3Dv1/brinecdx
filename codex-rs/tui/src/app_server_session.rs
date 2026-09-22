@@ -358,10 +358,23 @@ impl ThreadParamsMode {
         }
     }
 
-    fn model_provider_from_config(self, config: &Config) -> Option<String> {
+    fn model_route_from_config(
+        self,
+        config: &Config,
+    ) -> (Option<String>, Option<String>) {
         match self {
-            Self::Embedded => Some(config.model_provider_id.clone()),
-            Self::Remote => None,
+            Self::Embedded => (
+                config.model.clone(),
+                Some(config.model_provider_id.clone()),
+            ),
+            // Remote model overrides must remain route-atomic as well. The
+            // previous single-provider path forwarded model while omitting
+            // model_provider, which can combine a client model with an
+            // unrelated server provider after multi-provider persistence.
+            Self::Remote => (
+                config.model.clone(),
+                Some(config.model_provider_id.clone()),
+            ),
         }
     }
 }
@@ -2092,9 +2105,10 @@ pub(crate) fn thread_start_params_from_config(
             )
         })
         .flatten();
+    let (model, model_provider) = thread_params_mode.model_route_from_config(config);
     ThreadStartParams {
-        model: config.model.clone(),
-        model_provider: thread_params_mode.model_provider_from_config(config),
+        model,
+        model_provider,
         service_tier: service_tier_override_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(config),
@@ -2150,10 +2164,9 @@ fn thread_resume_params_from_config(
         }
     }
     let (model, model_provider) = match model_settings {
-        ResumeModelSettings::OverrideFromCurrentConfig => (
-            config.model.clone(),
-            thread_params_mode.model_provider_from_config(&config),
-        ),
+        ResumeModelSettings::OverrideFromCurrentConfig => {
+            thread_params_mode.model_route_from_config(&config)
+        }
         ResumeModelSettings::RestoreFromThread | ResumeModelSettings::PreserveExistingThread => {
             (None, None)
         }
@@ -2202,10 +2215,11 @@ fn thread_fork_params_from_config(
             )
         })
         .flatten();
+    let (model, model_provider) = thread_params_mode.model_route_from_config(&config);
     ThreadForkParams {
         thread_id: thread_id.to_string(),
-        model: config.model.clone(),
-        model_provider: thread_params_mode.model_provider_from_config(&config),
+        model,
+        model_provider,
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(&config),
@@ -2977,6 +2991,44 @@ mod tests {
         assert_eq!(params.model_provider, Some(config.model_provider_id));
         assert_eq!(params.thread_source, Some(ThreadSource::User));
         assert_eq!(params.dynamic_tools, None);
+    }
+
+    #[tokio::test]
+    async fn remote_model_overrides_forward_complete_route() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.model = Some("deepseek-v4-pro".to_string());
+        config.model_provider_id = "deepseek".to_string();
+        let thread_id = ThreadId::new();
+
+        let start = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Remote,
+            /*remote_cwd_override*/ None,
+            /*session_start_source*/ None,
+        );
+        let resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            ThreadParamsMode::Remote,
+            /*remote_cwd_override*/ None,
+            ResumeModelSettings::OverrideFromCurrentConfig,
+        );
+        let fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Remote,
+            /*remote_cwd_override*/ None,
+        );
+
+        for (model, provider) in [
+            (start.model, start.model_provider),
+            (resume.model, resume.model_provider),
+            (fork.model, fork.model_provider),
+        ] {
+            assert_eq!(model.as_deref(), Some("deepseek-v4-pro"));
+            assert_eq!(provider.as_deref(), Some("deepseek"));
+        }
     }
 
     #[tokio::test]

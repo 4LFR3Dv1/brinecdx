@@ -60,6 +60,18 @@ pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
         false
     }
 
+    /// Custom OpenAI-compatible providers should treat their remote catalog as authoritative
+    /// rather than inheriting the bundled first-party OpenAI model list.
+    fn prefers_remote_catalog(&self) -> bool {
+        false
+    }
+
+    /// Whether this endpoint may fall back to the bundled first-party model catalog before
+    /// remote discovery completes or when provider identity is temporarily unavailable.
+    fn uses_bundled_model_fallback(&self) -> bool {
+        true
+    }
+
     /// Fetches the latest remote model catalog and optional ETag.
     fn list_models<'a>(
         &'a self,
@@ -315,7 +327,11 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        let remote_models = load_remote_models_from_file().unwrap_or_default();
+        let remote_models = if endpoint_client.uses_bundled_model_fallback() {
+            load_remote_models_from_file().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         Self {
             remote_models: RwLock::new(ModelsCacheEntry {
                 fetched_at: Utc::now(),
@@ -395,8 +411,10 @@ impl ModelsManager for OpenAiModelsManager {
             let entry = self.remote_models.read().await;
             if entry.identity.is_some() && entry.identity == self.endpoint_client.identity() {
                 entry.models.clone()
-            } else {
+            } else if self.endpoint_client.uses_bundled_model_fallback() {
                 load_remote_models_from_file().unwrap_or_default()
+            } else {
+                Vec::new()
             }
         })
     }
@@ -406,8 +424,10 @@ impl ModelsManager for OpenAiModelsManager {
         Ok(
             if entry.identity.is_some() && entry.identity == self.endpoint_client.identity() {
                 entry.models.clone()
-            } else {
+            } else if self.endpoint_client.uses_bundled_model_fallback() {
                 load_remote_models_from_file().unwrap_or_default()
+            } else {
+                Vec::new()
             },
         )
     }
@@ -485,7 +505,8 @@ impl OpenAiModelsManager {
         // API-key discovery must be enabled and supported before reusing a remote catalog.
         // Otherwise even a matching cache from an earlier run would bypass bundled-only behavior.
         // Command-auth providers retain their existing discovery behavior.
-        if self.uses_api_key_auth()
+        if !self.endpoint_client.prefers_remote_catalog()
+            && self.uses_api_key_auth()
             && !self.endpoint_client.has_command_auth()
             && (!self.endpoint_client.supports_api_key_models()
                 || !self.api_key_model_discovery_enabled.load(Ordering::SeqCst))
@@ -563,7 +584,8 @@ impl OpenAiModelsManager {
     }
 
     async fn should_refresh_models(&self) -> bool {
-        self.endpoint_client.uses_codex_backend().await
+        self.endpoint_client.prefers_remote_catalog()
+            || self.endpoint_client.uses_codex_backend().await
             || self.endpoint_client.has_command_auth()
             || self.supports_api_key_discovery()
     }
@@ -575,17 +597,18 @@ impl OpenAiModelsManager {
             return false;
         }
         // Visible ChatGPT and OpenAI API-key catalogs are authoritative.
-        let remote_only = entry
-            .models
-            .iter()
-            .any(|model| model.visibility == ModelVisibility::List)
-            && (self.supports_api_key_discovery()
-                || self.auth_manager.as_ref().is_some_and(|auth_manager| {
-                    auth_manager
-                        .auth_mode()
-                        .is_some_and(AuthMode::has_chatgpt_account)
-                }));
-        if !remote_only {
+        let remote_only = self.endpoint_client.prefers_remote_catalog()
+            || (entry
+                .models
+                .iter()
+                .any(|model| model.visibility == ModelVisibility::List)
+                && (self.supports_api_key_discovery()
+                    || self.auth_manager.as_ref().is_some_and(|auth_manager| {
+                        auth_manager
+                            .auth_mode()
+                            .is_some_and(AuthMode::has_chatgpt_account)
+                    })));
+        if !remote_only && self.endpoint_client.uses_bundled_model_fallback() {
             let mut models = load_remote_models_from_file().unwrap_or_default();
             for model in entry.models {
                 if let Some(index) = models

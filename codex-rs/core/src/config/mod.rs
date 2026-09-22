@@ -893,6 +893,9 @@ pub struct Config {
     /// User-configured maximum number of spawned agent threads per session.
     pub agent_max_threads: Option<usize>,
 
+    /// Default provider for spawned subagents when the spawn call does not select a model.
+    pub agent_default_subagent_provider: Option<String>,
+
     /// Default model for spawned subagents when the spawn call does not select one.
     pub agent_default_subagent_model: Option<String>,
 
@@ -2117,6 +2120,51 @@ fn load_model_catalog(
     model_catalog_json
         .map(|path| load_catalog_json(&path))
         .transpose()
+}
+
+fn load_provider_model_catalogs(
+    model_providers: &mut HashMap<String, ModelProviderInfo>,
+    codex_home: &AbsolutePathBuf,
+) -> std::io::Result<()> {
+    for (provider_id, provider) in model_providers.iter_mut() {
+        let Some(configured_path) = provider.model_catalog_json.as_ref() else {
+            continue;
+        };
+        let path = if configured_path.is_absolute() {
+            configured_path.clone()
+        } else {
+            codex_home.to_path_buf().join(configured_path)
+        };
+        let file_contents = std::fs::read_to_string(&path).map_err(|err| {
+            std::io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to read model_providers.{provider_id}.model_catalog_json `{}`: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        let catalog = serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to parse model_providers.{provider_id}.model_catalog_json `{}` as JSON: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        if catalog.models.is_empty() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "model_providers.{provider_id}.model_catalog_json `{}` must contain at least one model",
+                    path.display()
+                ),
+            ));
+        }
+        provider.model_catalog = Some(catalog);
+    }
+    Ok(())
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -3731,9 +3779,10 @@ impl Config {
             .clone()
             .filter(|value| !value.is_empty());
 
-        let model_providers =
+        let mut model_providers =
             merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
                 .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
+        load_provider_model_catalogs(&mut model_providers, &codex_home)?;
 
         let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)
             .or(model_provider)
@@ -3813,6 +3862,10 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.max_depth)
             .unwrap_or(DEFAULT_AGENT_MAX_DEPTH);
+        let agent_default_subagent_provider = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.default_subagent_provider.clone());
         let agent_default_subagent_model = cfg
             .agents
             .as_ref()
@@ -3821,6 +3874,22 @@ impl Config {
             .agents
             .as_ref()
             .and_then(|agents| agents.default_subagent_reasoning_effort.clone());
+        if let Some(provider_id) = agent_default_subagent_provider.as_deref() {
+            if agent_default_subagent_model.is_none() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "agents.default_subagent_provider requires agents.default_subagent_model",
+                ));
+            }
+            if !model_providers.contains_key(provider_id) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "agents.default_subagent_provider references unknown provider `{provider_id}`"
+                    ),
+                ));
+            }
+        }
         let agent_interrupt_message_enabled = cfg
             .agents
             .as_ref()
@@ -4263,6 +4332,7 @@ impl Config {
             tool_output_token_limit: cfg.tool_output_token_limit,
             agents_enabled,
             agent_max_threads,
+            agent_default_subagent_provider,
             agent_default_subagent_model,
             agent_default_subagent_reasoning_effort,
             agent_max_depth,

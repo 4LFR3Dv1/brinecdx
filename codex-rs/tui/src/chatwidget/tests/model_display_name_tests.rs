@@ -43,7 +43,7 @@ async fn custom_model_display_name_in_pickers_preserves_selection_slug() {
     );
     chat.handle_key_event(KeyCode::Enter.into());
     let selected =
-        assert_matches!(events.try_recv(), Ok(AppEvent::OpenReasoningPopup { model }) => model);
+        assert_matches!(events.try_recv(), Ok(AppEvent::OpenReasoningPopup { provider_id: _, model }) => model);
     assert_eq!(selected, preset);
     chat.open_reasoning_popup(selected);
     assert_chatwidget_snapshot!(
@@ -93,11 +93,17 @@ async fn multi_provider_picker_groups_routes_and_preserves_provider_identity() {
     // Move explicitly to the DeepSeek row to prove a cross-provider selection.
     chat.handle_key_event(KeyCode::Up.into());
     chat.handle_key_event(KeyCode::Enter.into());
-    let selected =
-        assert_matches!(events.try_recv(), Ok(AppEvent::OpenReasoningPopup { model }) => model);
+    let (selected_provider, selected) =
+        assert_matches!(
+            events.try_recv(),
+            Ok(AppEvent::OpenReasoningPopup { provider_id, model }) => (provider_id, model)
+        );
+    assert_eq!(selected_provider, "deepseek");
     assert_eq!(selected.id, "deepseek::deepseek-chat");
 
-    chat.open_reasoning_popup(selected);
+    // Simulate local/provider drift: the explicit route from the picker must win.
+    chat.set_model_provider_id("openai");
+    chat.open_reasoning_popup_for_route(selected_provider, selected);
     chat.handle_key_event(KeyCode::Enter.into());
     assert_matches!(
         events.try_recv(),

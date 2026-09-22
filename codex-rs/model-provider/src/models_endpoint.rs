@@ -208,6 +208,14 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
             || self.provider_info.experimental_bearer_token.is_some()
     }
 
+    fn prefers_remote_catalog(&self) -> bool {
+        !self.provider_info.is_openai()
+    }
+
+    fn uses_bundled_model_fallback(&self) -> bool {
+        self.provider_info.is_openai()
+    }
+
     fn identity(&self) -> Option<String> {
         let auth = self
             .auth_manager

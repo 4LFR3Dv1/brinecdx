@@ -35,6 +35,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -344,6 +345,49 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 }
 
 #[tokio::test]
+async fn spawn_agent_uses_configured_luna_default_route() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+
+    let mut config = (*turn.config).clone();
+    config.agent_default_subagent_provider = Some("openai".to_string());
+    config.agent_default_subagent_model = Some("gpt-5.6-luna".to_string());
+    config.agent_default_subagent_reasoning_effort = Some(ReasoningEffort::High);
+    turn.config = Arc::new(config);
+
+    let output = SpawnAgentHandler::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "implement the bounded child workpack"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should use configured Luna default route");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let agent_id = parse_agent_id(
+        result["agent_id"]
+            .as_str()
+            .expect("spawned agent id should be present"),
+    );
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model_provider_id, "openai");
+    assert_eq!(snapshot.model, "gpt-5.6-luna");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
+}
+
+#[tokio::test]
 async fn spawn_agent_fork_context_rejects_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
@@ -464,7 +508,7 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
     {
         let (mut session, turn) = make_session_and_context().await;
         let mut turn = turn
-            .with_model("gpt-5.5".to_string(), &session.services.models_manager)
+            .with_model("gpt-5.5".to_string(), &session.services.models_manager())
             .await;
         let mut config = (*turn.config).clone();
         config.model_catalog = Some(service_tier_test_catalog());
@@ -476,10 +520,11 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
             .await
             .expect("root thread should start");
         session.services.agent_control = root.thread.session.services.agent_control.clone();
-        session.services.models_manager = Arc::new(StaticModelsManager::new(
+        session.services.models_manager = (Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             service_tier_test_catalog(),
-        ));
+        )) as Arc<dyn ModelsManager>)
+        .into();
         session.thread_id = root.thread_id;
 
         let output = SpawnAgentHandler::default()
@@ -510,7 +555,7 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
     {
         let (mut session, turn) = make_session_and_context().await;
         let mut turn = turn
-            .with_model("gpt-5.5".to_string(), &session.services.models_manager)
+            .with_model("gpt-5.5".to_string(), &session.services.models_manager())
             .await;
         let mut config = (*turn.config).clone();
         config.model_catalog = Some(service_tier_test_catalog());
@@ -522,10 +567,11 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
             .await
             .expect("root thread should start");
         session.services.agent_control = root.thread.session.services.agent_control.clone();
-        session.services.models_manager = Arc::new(StaticModelsManager::new(
+        session.services.models_manager = (Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             service_tier_test_catalog(),
-        ));
+        )) as Arc<dyn ModelsManager>)
+        .into();
         session.thread_id = root.thread_id;
 
         let output = SpawnAgentHandler::default()
@@ -626,7 +672,7 @@ async fn spawn_agent_role_service_tier_cannot_override_root_preference() {
 
     let (mut session, turn) = make_session_and_context().await;
     let mut turn = turn
-        .with_model("gpt-5.5".to_string(), &session.services.models_manager)
+        .with_model("gpt-5.5".to_string(), &session.services.models_manager())
         .await;
     tokio::fs::create_dir_all(&turn.config.codex_home)
         .await
@@ -698,7 +744,7 @@ async fn spawn_agent_full_history_fork_inherits_root_service_tier() {
 
     let (mut session, turn) = make_session_and_context().await;
     let mut turn = turn
-        .with_model("gpt-5.5".to_string(), &session.services.models_manager)
+        .with_model("gpt-5.5".to_string(), &session.services.models_manager())
         .await;
     let mut config = (*turn.config).clone();
     config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
@@ -748,7 +794,7 @@ async fn multi_agent_v2_full_history_fork_inherits_root_service_tier() {
 
     let (mut session, turn) = make_session_and_context().await;
     let mut turn = turn
-        .with_model("gpt-5.5".to_string(), &session.services.models_manager)
+        .with_model("gpt-5.5".to_string(), &session.services.models_manager())
         .await;
     let mut config = (*turn.config).clone();
     config.service_tier = Some(ServiceTier::Fast.request_value().to_string());

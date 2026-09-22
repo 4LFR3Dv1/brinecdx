@@ -555,7 +555,7 @@ async fn world_state_extension_metrics_follow_turn_model_switch() {
     };
     let turn_context = Arc::new(
         turn_context
-            .with_model(next_model.to_string(), &session.services.models_manager)
+            .with_model(next_model.to_string(), &session.services.models_manager())
             .await,
     );
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
@@ -4020,6 +4020,7 @@ async fn set_rate_limits_retains_previous_credits() {
         },
     };
     let session_configuration = SessionConfiguration {
+        model_provider_id: config.model_provider_id.clone(),
         provider: create_model_provider(config.model_provider.clone(), /*auth_manager*/ None),
         environments: Vec::new(),
         step_settings: Arc::new(StepSettings {
@@ -4142,6 +4143,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         },
     };
     let session_configuration = SessionConfiguration {
+        model_provider_id: config.model_provider_id.clone(),
         provider: create_model_provider(config.model_provider.clone(), /*auth_manager*/ None),
         environments: Vec::new(),
         step_settings: Arc::new(StepSettings {
@@ -4333,11 +4335,11 @@ async fn turn_context_with_model_updates_model_fields() {
     });
     turn_context.next_step_input.store(Arc::clone(&current));
     let updated = turn_context
-        .with_model("gpt-5.5".to_string(), &session.services.models_manager)
+        .with_model("gpt-5.5".to_string(), &session.services.models_manager())
         .await;
     let expected_model_info = session
         .services
-        .models_manager
+        .models_manager()
         .get_model_info(
             "gpt-5.5",
             &updated.config.as_ref().to_models_manager_config(),
@@ -4767,6 +4769,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     };
 
     SessionConfiguration {
+        model_provider_id: config.model_provider_id.clone(),
         provider: create_model_provider(config.model_provider.clone(), /*auth_manager*/ None),
         environments: Vec::new(),
         step_settings: Arc::new(StepSettings {
@@ -5856,6 +5859,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         },
     };
     let session_configuration = SessionConfiguration {
+        model_provider_id: config.model_provider_id.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
             Some(Arc::clone(&auth_manager)),
@@ -6037,6 +6041,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
+        model_provider_id: config.model_provider_id.clone(),
         environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
@@ -6158,7 +6163,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         )
         .with_legacy_custom_ca_fallback(),
         session_telemetry: session_telemetry.clone(),
-        models_manager: Arc::clone(&models_manager),
+        models_manager: Arc::clone(&models_manager).into(),
         git_root_discovery: Arc::default(),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         runtime_handle: tokio::runtime::Handle::current(),
@@ -6208,7 +6213,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*attestation_provider*/ None,
             config.http_client_factory(),
             config.workspace_routing_context(),
-        ),
+        )
+        .into(),
         executed_tool_calls: executed_tool_calls.clone(),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             thread_id,
@@ -6352,6 +6358,7 @@ async fn make_session_with_config_and_rx(
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
+        model_provider_id: config.model_provider_id.clone(),
         environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
@@ -6484,6 +6491,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
+        model_provider_id: config.model_provider_id.clone(),
         environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
@@ -8292,6 +8300,7 @@ where
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
+        model_provider_id: config.model_provider_id.clone(),
         environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
@@ -8416,7 +8425,7 @@ where
         )
         .with_legacy_custom_ca_fallback(),
         session_telemetry: session_telemetry.clone(),
-        models_manager: Arc::clone(&models_manager),
+        models_manager: Arc::clone(&models_manager).into(),
         git_root_discovery: Arc::default(),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         runtime_handle: tokio::runtime::Handle::current(),
@@ -8466,7 +8475,8 @@ where
             /*attestation_provider*/ None,
             config.http_client_factory(),
             config.workspace_routing_context(),
-        ),
+        )
+        .into(),
         executed_tool_calls: executed_tool_calls.clone(),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             thread_id,
@@ -9303,7 +9313,7 @@ async fn record_context_updates_emits_environment_item_for_network_changes() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info().slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
 
@@ -9359,7 +9369,7 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info().slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     let cwd = test_path_buf("/new-repo").abs();
@@ -9416,7 +9426,7 @@ async fn record_context_updates_use_environment_permission_profile_and_workspace
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info().slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     let environment = current_context
@@ -9471,7 +9481,7 @@ async fn record_context_updates_emits_environment_item_for_time_changes() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info().slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     current_context.timezone = Some("Europe/Berlin".to_string());
@@ -9495,7 +9505,7 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info().slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     let mut config = (*current_context.config).clone();
@@ -9560,7 +9570,7 @@ async fn record_context_updates_emits_realtime_start_when_session_becomes_live()
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info().slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     current_context.realtime_active = true;
@@ -9584,7 +9594,7 @@ async fn record_context_updates_emits_realtime_end_when_session_stops_being_live
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info().slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     current_context.realtime_active = false;
@@ -10497,7 +10507,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         "gpt-5.4"
     };
     let turn_context = previous_context
-        .with_model(next_model.to_string(), &session.services.models_manager)
+        .with_model(next_model.to_string(), &session.services.models_manager())
         .await;
     let rollout_path = attach_thread_persistence(&mut session).await;
 
@@ -10972,7 +10982,7 @@ async fn remote_compaction_v2_retains_only_the_selected_step(first_attempt: Firs
         )
         .await;
     let primary_turn = Arc::new(
-        turn.with_model("gpt-5.4".to_string(), &session.services.models_manager)
+        turn.with_model("gpt-5.4".to_string(), &session.services.models_manager())
             .await,
     );
     let primary = session
@@ -11015,7 +11025,7 @@ async fn remote_compaction_v2_retains_only_the_selected_step(first_attempt: Firs
         ],
     };
     let requests = responses::mount_response_sequence(&server, replies).await;
-    let mut client_session = session.services.model_client.new_session();
+    let mut client_session = session.services.model_client().new_session();
     crate::compact_remote_v2::run_inline_remote_auto_compact_task(
         Arc::clone(&session),
         Arc::clone(&primary),
