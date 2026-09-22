@@ -35,6 +35,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -519,10 +520,10 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
             .await
             .expect("root thread should start");
         session.services.agent_control = root.thread.session.services.agent_control.clone();
-        session.services.models_manager = Arc::new(StaticModelsManager::new(
+        session.services.models_manager = (Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             service_tier_test_catalog(),
-        ))
+        )) as Arc<dyn ModelsManager>)
         .into();
         session.thread_id = root.thread_id;
 
@@ -566,10 +567,10 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
             .await
             .expect("root thread should start");
         session.services.agent_control = root.thread.session.services.agent_control.clone();
-        session.services.models_manager = Arc::new(StaticModelsManager::new(
+        session.services.models_manager = (Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             service_tier_test_catalog(),
-        ))
+        )) as Arc<dyn ModelsManager>)
         .into();
         session.thread_id = root.thread_id;
 

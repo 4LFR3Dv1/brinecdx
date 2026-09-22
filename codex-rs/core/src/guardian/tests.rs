@@ -35,6 +35,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_prompts::GuardianPolicyInstructions;
@@ -1823,10 +1824,10 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
     Arc::get_mut(&mut session)
         .expect("unshared session")
         .services
-        .models_manager = Arc::new(StaticModelsManager::new(
+        .models_manager = (Arc::new(StaticModelsManager::new(
         /*auth_manager*/ None,
         ModelsResponse { models: vec![] },
-    ))
+    )) as Arc<dyn ModelsManager>)
     .into();
     seed_guardian_parent_history(&session, &turn).await;
 
@@ -1918,7 +1919,7 @@ async fn guardian_request_model_for_auto_review(
             Arc::get_mut(&mut session)
                 .expect("session should be unique")
                 .services
-                .models_manager = Arc::new(models_manager).into();
+                .models_manager = (Arc::new(models_manager) as Arc<dyn ModelsManager>).into();
             crate::guardian::test_host::install(&session, &turn.config);
         }
     }
@@ -3793,12 +3794,12 @@ async fn guardian_review_session_config_preserves_context_overrides_for_same_eff
     Arc::get_mut(&mut session)
         .expect("session should be unique")
         .services
-        .models_manager = Arc::new(StaticModelsManager::new(
+        .models_manager = (Arc::new(StaticModelsManager::new(
         Some(auth_manager),
         ModelsResponse {
             models: vec![parent_model],
         },
-    ))
+    )) as Arc<dyn ModelsManager>)
     .into();
     let mut config = (*turn.config).clone();
     config.model = Some("stale-parent-model".to_string());
