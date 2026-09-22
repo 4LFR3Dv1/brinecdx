@@ -209,6 +209,8 @@ fn model_provider_to_proto(
         name,
         base_url,
         model_catalog_url,
+        model_catalog_json: _,
+        model_catalog: _,
         env_key,
         env_key_instructions,
         experimental_bearer_token,
